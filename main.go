@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"text/template"
 
@@ -18,7 +19,12 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+	builtBy = "unknown"
+)
 
 const (
 	serviceName        = "nocloud-init"
@@ -115,6 +121,14 @@ StandardOutput=journal+console
 WantedBy=sysinit.target
 `
 
+func printVersion() {
+	fmt.Printf("%s %s\n", serviceName, version)
+	fmt.Printf("commit:    %s\n", commit)
+	fmt.Printf("built:     %s\n", date)
+	fmt.Printf("builtBy:   %s\n", builtBy)
+	fmt.Printf("go:        %s\n", runtime.Version())
+	fmt.Printf("os/arch:   %s/%s\n", runtime.GOOS, runtime.GOARCH)
+}
 func netmaskToCIDR(netmask string) (int, error) {
 	ip := net.ParseIP(netmask)
 	if ip == nil {
@@ -494,7 +508,7 @@ Options:
 	}
 
 	if *versionFlag {
-		fmt.Printf("%s version %s\n", serviceName, version)
+		printVersion()
 		return
 	}
 
