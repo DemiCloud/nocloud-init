@@ -1,42 +1,38 @@
+# Project metadata
 NAME := nocloud-init
-
-# Extract version from the latest Git tag (e.g. v1.0.0)
 VERSION := $(shell git describe --tags --abbrev=0)
+BUILT_BY ?= DemiCloud
+
+# Base linker flags (used for dev builds)
 LDFLAGS := -X main.version=$(VERSION)
 
-BUILD := build
-DIST := dist
+# Release linker flags (strip symbols + trim paths)
+RELEASE_LDFLAGS := $(LDFLAGS) -s -w -trimpath \
+	-X main.commit=$(shell git rev-parse --short HEAD) \
+	-X main.date=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ") \
+	-X main.builtBy=$(BUILT_BY)
 
-# Platforms for release builds
+# Target platforms
 PLATFORMS := linux/amd64 linux/arm64
 
-# Default target: local build
-all: build-local
-
-# Local build for host platform
-build-local:
-	mkdir -p $(BUILD)
-	go build -ldflags "$(LDFLAGS)" -o $(BUILD)/$(NAME)
-
-# Optional cross-compile:
-# make build GOOS=linux GOARCH=arm64
+# Default build (debug symbols kept)
 build:
-	mkdir -p $(BUILD)
-	GOOS=$(GOOS) GOARCH=$(GOARCH) go build -ldflags "$(LDFLAGS)" -o $(BUILD)/$(NAME)
+	mkdir -p build
+	go mod tidy
+	go build -ldflags "$(LDFLAGS)" -o build/$(NAME)
 
-# Release: build and package all platforms
-release: clean $(DIST) $(PLATFORMS)
-
-$(DIST):
-	mkdir -p $(DIST)
-
-# Pattern rule for each platform in PLATFORMS
-$(PLATFORMS):
-	GOOS=$(word 1,$(subst /, ,$@)) \
-	GOARCH=$(word 2,$(subst /, ,$@)) \
-	go build -ldflags "$(LDFLAGS)" -o $(DIST)/$(NAME)
-	tar -czf $(DIST)/$(NAME)_$(VERSION)_$(word 1,$(subst /, ,$@))_$(word 2,$(subst /, ,$@)).tar.gz -C $(DIST) $(NAME)
-	rm $(DIST)/$(NAME)
+# Release build (static, stripped, reproducible-ish)
+release: clean
+	mkdir -p dist
+	go mod tidy
+	$(foreach platform,$(PLATFORMS), \
+		OS=$(word 1,$(subst /, ,$(platform))); \
+		ARCH=$(word 2,$(subst /, ,$(platform))); \
+		echo "Building $$OS/$$ARCH"; \
+		GOOS=$$OS GOARCH=$$ARCH CGO_ENABLED=0 go build -ldflags "$(RELEASE_LDFLAGS)" -o dist/$(NAME); \
+		tar -czf dist/$(NAME)_$(VERSION)_$${OS}_$${ARCH}.tar.gz -C dist $(NAME); \
+		rm dist/$(NAME); \
+	)
 
 clean:
-	rm -rf $(BUILD) $(DIST)
+	rm -rf build dist
