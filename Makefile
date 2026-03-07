@@ -7,7 +7,7 @@ BUILT_BY ?= DemiCloud
 LDFLAGS := -X main.version=$(VERSION)
 
 # Release linker flags (strip symbols + trim paths)
-RELEASE_LDFLAGS := $(LDFLAGS) -s -w -trimpath \
+RELEASE_LDFLAGS := $(LDFLAGS) -s -w \
 	-X main.commit=$(shell git rev-parse --short HEAD) \
 	-X main.date=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ") \
 	-X main.builtBy=$(BUILT_BY)
@@ -29,7 +29,7 @@ release: clean
 		OS=$(word 1,$(subst /, ,$(platform))); \
 		ARCH=$(word 2,$(subst /, ,$(platform))); \
 		echo "Building $$OS/$$ARCH"; \
-		GOOS=$$OS GOARCH=$$ARCH CGO_ENABLED=0 go build -ldflags "$(RELEASE_LDFLAGS)" -o dist/$(NAME); \
+		GOOS=$$OS GOARCH=$$ARCH CGO_ENABLED=0 go build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o dist/$(NAME); \
 		tar -czf dist/$(NAME)_$(VERSION)_$${OS}_$${ARCH}.tar.gz -C dist $(NAME); \
 		rm dist/$(NAME); \
 	)
