@@ -104,12 +104,21 @@ const resolvConfTemplate = `search {{.SearchDomain}}
 
 const systemdServiceTemplate = `[Unit]
 Description=Cloud-Init NoCloud initialization
+Documentation=https://github.com/demicloud/nocloud-init
 DefaultDependencies=no
+
+# /etc and block devices must exist
 After=local-fs.target
+
+# Run before udev settles NIC naming
+Before=systemd-udev-settle.service
+
+# Run before networkd consumes link/network files
 Before=systemd-networkd.service
-Before=systemd-hostnamed.service
+Before=network-pre.target
 Before=network.target
 Before=network-online.target
+
 ConditionPathExists=!/etc/cloud/cloud-init.disabled
 
 [Service]
