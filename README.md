@@ -1,5 +1,18 @@
 # nocloud-init
 
+## Table of Contents
+- [Supported Features](#supported-features)
+- [Dependencies](#dependencies)
+- [Known Compatible Platforms](#known-compatible-platforms)
+- [Compiling](#compiling)
+  - [Using Make](#using-make-recommended)
+  - [Using Go directly](#using-go-directly)
+- [Installation & Usage](#installation--usage)
+  - [Install the binary](#1-install-the-binary)
+  - [Install and enable the systemd service](#2-install-and-enable-the-systemd-service)
+  - [Provide NoCloud seed data](#3-provide-nocloud-seed-data)
+- [Disabling](#disabling)
+
 A minimal cloud-init–compatible client implementing the NoCloud datasource. It detects a CIDATA‑labeled ISO 9660 source, mounts it, reads `user-data` and `network-config`, and applies system configuration deterministically. If no CIDATA device is present, it exits cleanly without modifying the system, making it safe for VM templates and stateless provisioning.
 
 ## Supported Features
