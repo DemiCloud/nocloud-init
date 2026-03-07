@@ -1,26 +1,37 @@
 # SO-nocloud-init
-A Go implementation of cloud-init, using the [NoCloud](https://cloudinit.readthedocs.io/en/latest/reference/datasources/nocloud.html) standard. Works with Proxmox. Detects a NoCloud ISO 9660 CD-ROM image with the label "CIDATA" or "cidata", and mounts it, then parses the NoCloud configuration files.
 
-## Supports:
-* Network Configuration
-  * Static IPs
-  * Multiple Interfaces
-  * Renames interfaces
-  * Configures Global DNS
-  * DHCP
-* Hostname update
-  * Updates `hostnamectl`
-  * Updates `/etc/hosts` to properly support an FQDN, E.G. via `hostname -f`
-* Update password for specified user
-* Regenerate host ssh keys if they don't exist (E.G. for cloning from templates)
+A minimal cloud-init–compatible client implementing the NoCloud datasource. It detects a CIDATA-labeled ISO 9660 source, mounts it, reads `user-data` and `network-config`, and applies system configuration deterministically. If no CIDATA device is present, the service exits cleanly without modifying the system, making it safe for VM templates and stateless provisioning.
+
+## Supported Features
+
+### Network configuration
+- Static addressing
+- DHCP
+- Multiple interfaces
+- Interface renaming
+- Global DNS configuration
+- systemd-networkd `.network` file generation
+
+### System identity
+- Hostname updates via `hostnamectl`
+- `/etc/hosts` updates for proper FQDN resolution (e.g., `hostname -f`)
+
+### User management
+- Password update for a specified user
+- SSH host key generation when missing (ideal for template cloning)
 
 ## Dependencies
-* systemd-networkd
-* usermod
-* hostnamectl
-* iproute2
-* ssh-keygen
-* blkid
+- systemd-networkd
+- usermod
+- hostnamectl
+- iproute2
+- ssh-keygen
+- blkid
 
-## Disable
-Compliant with Cloud-init. `touch /etc/cloud/cloud-init.disabled` will stop the service from running.
+## Known Compatible Platforms
+- Proxmox (via NoCloud ISO attachment)
+
+## Disabling
+To disable execution, create the standard cloud-init disable marker:
+
+`touch /etc/cloud/cloud-init.disabled`
