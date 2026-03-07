@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	__VERSION__        = "0.17.0"
+	__VERSION__        = "1.0.0"
 	serviceName        = "nocloud-init"
 	serviceDescription = "A Cloud-init client for NoCloud"
 
