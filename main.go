@@ -18,8 +18,9 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+var version = "dev"
+
 const (
-	__VERSION__        = "1.0.0"
 	serviceName        = "nocloud-init"
 	serviceDescription = "A Cloud-init client for NoCloud"
 
@@ -486,14 +487,14 @@ Options:
   -h, --help       Display help information
   -i, --install    Install systemd service
   -V, --version    Display version information`,
-			serviceName, __VERSION__, serviceDescription)
+			serviceName, version, serviceDescription)
 
 		fmt.Println(helpText)
 		return
 	}
 
 	if *versionFlag {
-		fmt.Printf("%s version %s\n", serviceName, __VERSION__)
+		fmt.Printf("%s version %s\n", serviceName, version)
 		return
 	}
 

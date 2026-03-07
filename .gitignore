@@ -2,6 +2,9 @@
 /build/
 /build/nocloud-init
 
+# Release artifacts
+/dist/
+
 # Go binaries (cross‑platform)
 *.exe
 *.exe~
