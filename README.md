@@ -1,4 +1,4 @@
-# SO-nocloud-init
+# nocloud-init
 
 A minimal cloud-init–compatible client implementing the NoCloud datasource. It detects a CIDATA-labeled ISO 9660 source, mounts it, reads `user-data` and `network-config`, and applies system configuration deterministically. If no CIDATA device is present, the service exits cleanly without modifying the system, making it safe for VM templates and stateless provisioning.
 
