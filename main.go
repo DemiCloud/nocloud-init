@@ -42,7 +42,6 @@ const (
 var requiredPrograms = []string{
 	"networkctl",
 	"usermod",
-	"hostnamectl",
 	"ssh-keygen",
 }
 
@@ -106,9 +105,11 @@ const resolvConfTemplate = `search {{.SearchDomain}}
 const systemdServiceTemplate = `[Unit]
 Description=Cloud-Init NoCloud initialization
 DefaultDependencies=no
-After=systemd-hostnamed.service
-Requires=systemd-hostnamed.service
+After=local-fs.target
+Before=systemd-networkd.service
+Before=systemd-hostnamed.service
 Before=network.target
+Before=network-online.target
 ConditionPathExists=!/etc/cloud/cloud-init.disabled
 
 [Service]
@@ -116,6 +117,12 @@ Type=oneshot
 ExecStart={{.ExecPath}}
 RemainAfterExit=yes
 StandardOutput=journal+console
+
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
 
 [Install]
 WantedBy=sysinit.target
@@ -182,8 +189,20 @@ func unmountISO(mountPoint string) error {
 }
 
 func updateHostname(hostname string) error {
-	cmd := exec.Command("hostnamectl", "set-hostname", hostname)
-	return cmd.Run()
+	// 1. Write /etc/hostname
+	if err := os.WriteFile("/etc/hostname", []byte(hostname+"\n"), 0644); err != nil {
+		return fmt.Errorf("failed to write /etc/hostname: %w", err)
+	}
+
+	// 2. Update kernel hostname directly
+	if err := unix.Sethostname([]byte(hostname)); err != nil {
+		return fmt.Errorf("failed to set kernel hostname: %w", err)
+	}
+
+	// 3. Optional: pretty hostname
+	_ = os.WriteFile("/etc/machine-info", []byte("PRETTY_HOSTNAME="+hostname+"\n"), 0644)
+
+	return nil
 }
 
 func updatePassword(user, hashedPassword string) error {

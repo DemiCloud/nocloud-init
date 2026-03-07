@@ -26,7 +26,7 @@ A minimal cloud-init–compatible client implementing the NoCloud datasource. It
 - systemd-networkd `.network` file generation
 
 ### System identity
-- Hostname updates via `hostnamectl`
+- Hostname updates
 - `/etc/hosts` updates for proper FQDN resolution (e.g., `hostname -f`)
 
 ### User management
@@ -36,7 +36,6 @@ A minimal cloud-init–compatible client implementing the NoCloud datasource. It
 ## Dependencies
 - systemd-networkd
 - usermod
-- hostnamectl
 - iproute2
 - ssh-keygen
 - blkid
