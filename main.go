@@ -128,8 +128,6 @@ var ErrCIDATANotFound = errors.New("CIDATA device not found")
 func findCIDATADevice() (string, error) {
 	entries, err := os.ReadDir("/dev/disk/by-label")
 	if err != nil {
-		// On MicroOS early boot, this directory may exist but be unreadable.
-		// Treat ALL read errors as "CIDATA not found".
 		if os.IsNotExist(err) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.EIO) {
 			return "", ErrCIDATANotFound
 		}
