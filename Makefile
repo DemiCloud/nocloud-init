@@ -19,7 +19,7 @@ PLATFORMS := linux/amd64 linux/arm64
 build:
 	mkdir -p build
 	go mod tidy
-	go build -ldflags "$(LDFLAGS)" -o build/$(NAME)
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o build/$(NAME)
 
 # Release build (static, stripped, reproducible-ish)
 release: clean
@@ -33,6 +33,7 @@ release: clean
 		tar -czf dist/$(NAME)_$(VERSION)_$${OS}_$${ARCH}.tar.gz -C dist $(NAME); \
 		rm dist/$(NAME); \
 	)
+	cd dist && sha256sum *.tar.gz > checksums.txt
 
 clean:
 	rm -rf build dist

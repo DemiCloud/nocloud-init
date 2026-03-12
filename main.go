@@ -36,11 +36,9 @@ const (
 	sshKeyPath        = "/etc/ssh/ssh_host_rsa_key"
 	resolvConfPath    = "/etc/resolv.conf"
 
-	cidataLabelPath = "/dev/disk/by-label/CIDATA"
 )
 
 var requiredPrograms = []string{
-	"networkctl",
 	"usermod",
 	"ssh-keygen",
 }
@@ -55,9 +53,12 @@ type UserData struct {
 	FQDN           string `yaml:"fqdn" json:"fqdn"`
 	User           string `yaml:"user" json:"user"`
 	Password       string `yaml:"password" json:"password"`
-	Chpasswd       struct {
+	// Chpasswd is defined by the NoCloud spec but Expire is not yet implemented.
+	Chpasswd struct {
 		Expire bool `yaml:"expire" json:"expire"`
 	} `yaml:"chpasswd" json:"chpasswd"`
+	// Users is defined by the NoCloud spec but not yet implemented.
+	// Proxmox does not populate this field; support may be added in a future release.
 	Users []string `yaml:"users" json:"users"`
 }
 
@@ -195,6 +196,18 @@ func unmountISO(mountPoint string) error {
 		return fmt.Errorf("failed to unmount %s: %v", mountPoint, err)
 	}
 	return nil
+}
+
+func isValidHostname(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	for _, c := range s {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+			return false
+		}
+	}
+	return true
 }
 
 func updateHostname(hostname string) error {
@@ -492,25 +505,25 @@ func checkDirectories() error {
 }
 
 func unmarshalUserData(data []byte, ud *UserData) error {
-	if err := yaml.Unmarshal(data, ud); err == nil {
+	yamlErr := yaml.Unmarshal(data, ud)
+	if yamlErr == nil {
 		return nil
 	}
-	yamlErr := yaml.Unmarshal(data, ud)
 	if err := json.Unmarshal(data, ud); err == nil {
 		return nil
 	}
-	return yamlErr
+	return fmt.Errorf("yaml: %v", yamlErr)
 }
 
 func unmarshalNetworkConfig(data []byte, nc *NetworkConfig) error {
-	if err := yaml.Unmarshal(data, nc); err == nil {
+	yamlErr := yaml.Unmarshal(data, nc)
+	if yamlErr == nil {
 		return nil
 	}
-	yamlErr := yaml.Unmarshal(data, nc)
 	if err := json.Unmarshal(data, nc); err == nil {
 		return nil
 	}
-	return yamlErr
+	return fmt.Errorf("yaml: %v", yamlErr)
 }
 
 func main() {
@@ -608,15 +621,24 @@ Options:
 	}
 	log.Printf("Parsed user-data: %+v", safeUserData)
 
+	if userData.Hostname != "" && !isValidHostname(userData.Hostname) {
+		log.Fatalf("Invalid hostname %q: must contain only letters, digits, hyphens, and dots", userData.Hostname)
+	}
+	if userData.FQDN != "" && !isValidHostname(userData.FQDN) {
+		log.Fatalf("Invalid fqdn %q: must contain only letters, digits, hyphens, and dots", userData.FQDN)
+	}
+
 	if err := updateHostname(userData.Hostname); err != nil {
 		log.Fatalf("Failed to update hostname: %v", err)
 	}
 	log.Printf("Updated hostname to %s", userData.Hostname)
 
-	if err := updatePassword(userData.User, userData.Password); err != nil {
-		log.Fatalf("Failed to update password for user %s: %v", userData.User, err)
+	if userData.User != "" && userData.Password != "" {
+		if err := updatePassword(userData.User, userData.Password); err != nil {
+			log.Fatalf("Failed to update password for user %s: %v", userData.User, err)
+		}
+		log.Printf("Updated password for user %s", userData.User)
 	}
-	log.Printf("Updated password for user %s", userData.User)
 
 	if err := updateHostsFile(userData); err != nil {
 		log.Fatalf("Failed to update /etc/hosts: %v", err)
@@ -624,19 +646,23 @@ Options:
 
 	networkConfigPath := mountDir + "/network-config"
 	networkConfigData, err := os.ReadFile(networkConfigPath)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		log.Fatalf("Failed to read network-config from %s: %v", networkConfigPath, err)
 	}
-	log.Printf("Read network-config from %s", networkConfigPath)
+	if err == nil {
+		log.Printf("Read network-config from %s", networkConfigPath)
 
-	var networkConfig NetworkConfig
-	if err := unmarshalNetworkConfig(networkConfigData, &networkConfig); err != nil {
-		log.Fatalf("Failed to parse network-config: %v", err)
-	}
-	log.Printf("Parsed network-config: %+v", networkConfig)
+		var networkConfig NetworkConfig
+		if err := unmarshalNetworkConfig(networkConfigData, &networkConfig); err != nil {
+			log.Fatalf("Failed to parse network-config: %v", err)
+		}
+		log.Printf("Parsed network-config: %+v", networkConfig)
 
-	if err := generateSystemdNetworkConfig(networkConfig); err != nil {
-		log.Fatalf("Failed to generate systemd-networkd config: %v", err)
+		if err := generateSystemdNetworkConfig(networkConfig); err != nil {
+			log.Fatalf("Failed to generate systemd-networkd config: %v", err)
+		}
+	} else {
+		log.Printf("No network-config found at %s, skipping network configuration", networkConfigPath)
 	}
 
 	if err := checkAndGenerateSSHKeys(); err != nil {
