@@ -34,11 +34,11 @@ A minimal cloud-init–compatible client implementing the NoCloud datasource. It
 - SSH host key generation when missing (ideal for template cloning)
 
 ## Dependencies
-- systemd-networkd
-- usermod
-- iproute2
-- ssh-keygen
-- blkid
+- `usermod` — for password updates
+- `ssh-keygen` — for SSH host key generation
+
+### Network configuration
+nocloud-init writes standard [systemd-networkd](https://www.freedesktop.org/software/systemd/man/latest/systemd.network.html) `.network` and `.link` files to `/etc/systemd/network/`. Any tool or service capable of consuming those files will work — systemd-networkd is the typical choice, but it is not a hard requirement.
 
 ## Known Compatible Platforms
 - Proxmox Virtual Environment (via CIDATA ISO attachment)
