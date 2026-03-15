@@ -1,0 +1,20 @@
+version: 1
+config:
+    - type: physical
+      name: eth0
+      mac_address: '52:54:00:11:22:33'
+      subnets:
+      - type: dhcp4
+    - type: physical
+      name: eth1
+      mac_address: '52:54:00:44:55:66'
+      subnets:
+      - type: static
+        address: '198.51.100.10'
+        netmask: '255.255.255.0'
+        gateway: '198.51.100.1'
+    - type: nameserver
+      address:
+      - '192.0.2.1'
+      search:
+      - 'example.com'
