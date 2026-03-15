@@ -1,0 +1,11 @@
+#cloud-config
+hostname: test-vm-01
+manage_etc_hosts: true
+fqdn: test-vm-01.example.com
+user: testuser
+password: $5$testsalt$fakehashedpasswordfortestingpurposes
+chpasswd:
+  expire: False
+users:
+  - default
+package_upgrade: true

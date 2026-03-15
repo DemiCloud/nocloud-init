@@ -1,0 +1,14 @@
+version: 2
+ethernets:
+  eth0:
+    match:
+      macaddress: "52:54:00:ab:cd:ef"
+    set-name: eth0
+    addresses:
+      - 192.0.2.10/24
+    gateway4: 192.0.2.1
+    nameservers:
+      addresses:
+        - 192.0.2.1
+      search:
+        - example.com

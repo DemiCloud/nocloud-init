@@ -19,7 +19,7 @@ PLATFORMS := linux/amd64 linux/arm64
 build:
 	mkdir -p build
 	go mod tidy
-	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o build/$(NAME)
+	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o build/$(NAME) ./cmd/nocloud-init/
 
 # Release build (static, stripped, reproducible-ish)
 release: clean
@@ -29,7 +29,7 @@ release: clean
 		OS=$(word 1,$(subst /, ,$(platform))); \
 		ARCH=$(word 2,$(subst /, ,$(platform))); \
 		echo "Building $$OS/$$ARCH"; \
-		GOOS=$$OS GOARCH=$$ARCH CGO_ENABLED=0 go build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o dist/$(NAME); \
+		GOOS=$$OS GOARCH=$$ARCH CGO_ENABLED=0 go build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o dist/$(NAME) ./cmd/nocloud-init/; \
 		tar -czf dist/$(NAME)_$(VERSION)_$${OS}_$${ARCH}.tar.gz -C dist $(NAME); \
 		rm dist/$(NAME); \
 	)

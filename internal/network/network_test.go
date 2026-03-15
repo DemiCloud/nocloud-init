@@ -1,0 +1,325 @@
+package network
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"no-cloud/internal/types"
+)
+
+func TestNetmaskToCIDR(t *testing.T) {
+	tests := []struct {
+		netmask string
+		want    int
+		wantErr bool
+	}{
+		{"255.255.255.0", 24, false},
+		{"255.255.0.0", 16, false},
+		{"255.0.0.0", 8, false},
+		{"255.255.255.128", 25, false},
+		{"255.255.255.252", 30, false},
+		{"0.0.0.0", 0, false},
+		{"255.255.255.255", 32, false},
+		{"not-a-mask", 0, true},
+		{"", 0, true},
+		{"999.999.999.999", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.netmask, func(t *testing.T) {
+			got, err := netmaskToCIDR(tt.netmask)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("netmaskToCIDR(%q) error = %v, wantErr %v", tt.netmask, err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Errorf("netmaskToCIDR(%q) = %d, want %d", tt.netmask, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseCIDRAddress(t *testing.T) {
+	tests := []struct {
+		input   string
+		wantIP  string
+		wantPfx int
+		wantErr bool
+	}{
+		// RFC 5737 documentation addresses
+		{"192.0.2.10/24", "192.0.2.10", 24, false},
+		{"198.51.100.10/24", "198.51.100.10", 24, false},
+		{"203.0.113.1/8", "203.0.113.1", 8, false},
+		// netmask notation fallback
+		{"192.0.2.10/255.255.255.0", "192.0.2.10", 24, false},
+		// invalid
+		{"not-an-address", "", 0, true},
+		{"192.0.2.10", "", 0, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			ip, pfx, err := parseCIDRAddress(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseCIDRAddress(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if ip != tt.wantIP {
+				t.Errorf("ip = %q, want %q", ip, tt.wantIP)
+			}
+			if pfx != tt.wantPfx {
+				t.Errorf("prefix = %d, want %d", pfx, tt.wantPfx)
+			}
+		})
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V1Static(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "52:54:00:ab:cd:ef",
+				Subnets: []types.NetworkConfigV1Subnet{
+					{Type: "static", Address: "192.0.2.10", Netmask: "255.255.255.0", Gateway: "192.0.2.1"},
+				},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"192.0.2.1"},
+				Search:  []string{"example.com"},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "MACAddress=52:54:00:ab:cd:ef")
+	assertFileContains(t, networkFile, "Address=192.0.2.10/24")
+	assertFileContains(t, networkFile, "Gateway=192.0.2.1")
+	assertFileNotContains(t, networkFile, "DHCP=yes")
+
+	linkFile := filepath.Join(dir, "10-cloud-init-eth0.link")
+	assertFileContains(t, linkFile, "MACAddress=52:54:00:ab:cd:ef")
+	assertFileContains(t, linkFile, "Name=eth0")
+
+	assertFileContains(t, resolvPath, "nameserver 192.0.2.1")
+	assertFileContains(t, resolvPath, "search example.com")
+}
+
+func TestGenerateSystemdNetworkConfig_V1DHCP(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets: []types.NetworkConfigV1Subnet{
+					{Type: "dhcp4"},
+				},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "DHCP=yes")
+	assertFileNotContains(t, networkFile, "\nAddress=")
+	assertFileNotContains(t, networkFile, "Gateway=")
+}
+
+func TestGenerateSystemdNetworkConfig_V2Static(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:     struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "52:54:00:ab:cd:ef"},
+				SetName:   "eth0",
+				Addresses: []string{"192.0.2.10/24"},
+				Gateway4:  "192.0.2.1",
+				Nameservers: struct {
+					Addresses []string `yaml:"addresses" json:"addresses"`
+					Search    []string `yaml:"search" json:"search"`
+				}{
+					Addresses: []string{"192.0.2.1"},
+					Search:    []string{"example.com"},
+				},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "MACAddress=52:54:00:ab:cd:ef")
+	assertFileContains(t, networkFile, "Address=192.0.2.10/24")
+	assertFileContains(t, networkFile, "Gateway=192.0.2.1")
+	assertFileNotContains(t, networkFile, "DHCP=yes")
+
+	linkFile := filepath.Join(dir, "10-cloud-init-eth0.link")
+	assertFileContains(t, linkFile, "MACAddress=52:54:00:ab:cd:ef")
+	assertFileContains(t, linkFile, "Name=eth0")
+
+	assertFileContains(t, resolvPath, "nameserver 192.0.2.1")
+	assertFileContains(t, resolvPath, "search example.com")
+}
+
+func TestGenerateSystemdNetworkConfig_V2DHCP(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP4:   true,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "DHCP=yes")
+	assertFileNotContains(t, networkFile, "\nAddress=")
+}
+
+func TestGenerateSystemdNetworkConfig_V2SetNameFallback(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	// set-name omitted: map key should be used as interface name
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"enp3s0": {
+				Match: struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				DHCP4: true,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-enp3s0.network"), "MACAddress=aa:bb:cc:dd:ee:ff")
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-enp3s0.link"), "Name=enp3s0")
+}
+
+// TestGenerateSystemdNetworkConfig_V1MultiNIC verifies generation for a
+// Proxmox-style config with two physical interfaces (eth0 DHCP, eth1 static)
+// plus a shared nameserver entry.
+func TestGenerateSystemdNetworkConfig_V1MultiNIC(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "52:54:00:11:22:33",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+			{
+				Type:       "physical",
+				Name:       "eth1",
+				MacAddress: "52:54:00:44:55:66",
+				Subnets: []types.NetworkConfigV1Subnet{
+					{Type: "static", Address: "198.51.100.10", Netmask: "255.255.255.0", Gateway: "198.51.100.1"},
+				},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"192.0.2.1"},
+				Search:  []string{"example.com"},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	// eth0 — DHCP
+	eth0Net := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, eth0Net, "MACAddress=52:54:00:11:22:33")
+	assertFileContains(t, eth0Net, "DHCP=yes")
+	assertFileNotContains(t, eth0Net, "\nAddress=")
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-eth0.link"), "Name=eth0")
+
+	// eth1 — static
+	eth1Net := filepath.Join(dir, "10-cloud-init-eth1.network")
+	assertFileContains(t, eth1Net, "MACAddress=52:54:00:44:55:66")
+	assertFileContains(t, eth1Net, "Address=198.51.100.10/24")
+	assertFileContains(t, eth1Net, "Gateway=198.51.100.1")
+	assertFileNotContains(t, eth1Net, "DHCP=yes")
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-eth1.link"), "Name=eth1")
+
+	// shared nameserver
+	assertFileContains(t, resolvPath, "nameserver 192.0.2.1")
+	assertFileContains(t, resolvPath, "search example.com")
+}
+
+func TestGenerateSystemdNetworkConfig_UnsupportedVersion(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{Version: 3}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for unsupported version, got nil")
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Errorf("error %q should mention unsupported version", err.Error())
+	}
+}
+
+func assertFileContains(t *testing.T, path, substr string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
+	if !strings.Contains(string(b), substr) {
+		t.Errorf("%s: expected to contain %q\ngot:\n%s", filepath.Base(path), substr, string(b))
+	}
+}
+
+func assertFileNotContains(t *testing.T, path, substr string) {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("failed to read %s: %v", path, err)
+	}
+	if strings.Contains(string(b), substr) {
+		t.Errorf("%s: expected NOT to contain %q\ngot:\n%s", filepath.Base(path), substr, string(b))
+	}
+}
