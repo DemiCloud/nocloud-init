@@ -1,6 +1,7 @@
 # Build artifacts
 /build/
-/build/nocloud-init
+/no-cloud
+/nocloud-init
 
 # Release artifacts
 /dist/
