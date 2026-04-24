@@ -9,11 +9,11 @@ import (
 
 	"github.com/spf13/pflag"
 
-	"no-cloud/internal/mount"
-	"no-cloud/internal/network"
-	"no-cloud/internal/service"
-	"no-cloud/internal/system"
-	"no-cloud/internal/types"
+	"github.com/demicloud/nocloud-init/internal/mount"
+	"github.com/demicloud/nocloud-init/internal/network"
+	"github.com/demicloud/nocloud-init/internal/service"
+	"github.com/demicloud/nocloud-init/internal/system"
+	"github.com/demicloud/nocloud-init/internal/types"
 )
 
 var (
@@ -134,10 +134,12 @@ Options:
 		log.Fatalf("Invalid fqdn %q: must contain only letters, digits, hyphens, and dots", userData.FQDN)
 	}
 
-	if err := system.UpdateHostname(userData.Hostname); err != nil {
-		log.Fatalf("Failed to update hostname: %v", err)
+	if userData.Hostname != "" {
+		if err := system.UpdateHostname(userData.Hostname); err != nil {
+			log.Fatalf("Failed to update hostname: %v", err)
+		}
+		log.Printf("Updated hostname to %s", userData.Hostname)
 	}
-	log.Printf("Updated hostname to %s", userData.Hostname)
 
 	if userData.User != "" && userData.Password != "" {
 		if err := system.UpdatePassword(userData.User, userData.Password); err != nil {
