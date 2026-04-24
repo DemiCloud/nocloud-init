@@ -54,8 +54,11 @@ func netmaskToCIDR(netmask string) (int, error) {
 	if ip == nil {
 		return 0, fmt.Errorf("invalid netmask: %s", netmask)
 	}
-	cidr, _ := net.IPMask(ip.To4()).Size()
-	return cidr, nil
+	ones, bits := net.IPMask(ip.To4()).Size()
+	if ones == 0 && bits == 0 {
+		return 0, fmt.Errorf("non-contiguous netmask: %s", netmask)
+	}
+	return ones, nil
 }
 
 // parseCIDRAddress parses an address in either CIDR prefix notation
