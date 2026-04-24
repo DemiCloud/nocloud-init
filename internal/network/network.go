@@ -5,12 +5,22 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 	"text/template"
 
-	"no-cloud/internal/types"
+	"github.com/demicloud/nocloud-init/internal/types"
 )
+
+// ifaceNameRe matches valid Linux interface names. Only alphanumerics, colons,
+// underscores, and hyphens are permitted to prevent path traversal when
+// interpolating names into /etc/systemd/network/ file paths.
+var ifaceNameRe = regexp.MustCompile(`^[a-zA-Z0-9:_-]+$`)
+
+func isValidInterfaceName(name string) bool {
+	return ifaceNameRe.MatchString(name)
+}
 
 const systemdNetworkDir = "/etc/systemd/network"
 const resolvConfPath = "/etc/resolv.conf"
@@ -147,6 +157,10 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if len(entry.Subnets) == 0 {
 			continue
 		}
+		if !isValidInterfaceName(entry.Name) {
+			return fmt.Errorf("invalid interface name %q: must match [a-zA-Z0-9:_-]+", entry.Name)
+		}
+
 		subnet := entry.Subnets[0]
 		useDHCP := subnet.Type == "dhcp4"
 
@@ -239,6 +253,10 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		ifaceName := eth.SetName
 		if ifaceName == "" {
 			ifaceName = key
+		}
+
+		if !isValidInterfaceName(ifaceName) {
+			return fmt.Errorf("invalid interface name %q: must match [a-zA-Z0-9:_-]+", ifaceName)
 		}
 
 		var address string

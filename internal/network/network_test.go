@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"no-cloud/internal/types"
+	"github.com/demicloud/nocloud-init/internal/types"
 )
 
 func TestNetmaskToCIDR(t *testing.T) {
@@ -288,6 +288,85 @@ func TestGenerateSystemdNetworkConfig_V1MultiNIC(t *testing.T) {
 	// shared nameserver
 	assertFileContains(t, resolvPath, "nameserver 192.0.2.1")
 	assertFileContains(t, resolvPath, "search example.com")
+}
+
+func TestIsValidInterfaceName(t *testing.T) {
+	valid := []string{"eth0", "enp3s0", "eth0:1", "eth_0", "eth-0", "lo", "wlan0"}
+	for _, name := range valid {
+		if !isValidInterfaceName(name) {
+			t.Errorf("isValidInterfaceName(%q) = false, want true", name)
+		}
+	}
+
+	invalid := []string{"", "../etc/passwd", "eth0/bad", "eth0\x00null", "eth0.1", "eth 0", "eth0!"}
+	for _, name := range invalid {
+		if isValidInterfaceName(name) {
+			t.Errorf("isValidInterfaceName(%q) = true, want false", name)
+		}
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V1InvalidInterfaceName(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "../evil",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid interface name, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid interface name") {
+		t.Errorf("error %q should mention invalid interface name", err.Error())
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V2InvalidInterfaceName(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"../evil": {
+				Match: struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				DHCP4: true,
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid interface name, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid interface name") {
+		t.Errorf("error %q should mention invalid interface name", err.Error())
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V2InvalidSetName(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "../../etc/cron.d/evil",
+				DHCP4:   true,
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid set-name, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid interface name") {
+		t.Errorf("error %q should mention invalid interface name", err.Error())
+	}
 }
 
 func TestGenerateSystemdNetworkConfig_UnsupportedVersion(t *testing.T) {
