@@ -1,6 +1,7 @@
 package network
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"net"
@@ -57,11 +58,25 @@ func isValidDomain(domain string) bool {
 	return true
 }
 
-// writeNetworkFile renders tmpl with data and atomically writes the result to
-// path using a temp-file-then-rename strategy so that readers never observe a
-// truncated or partially-written file.  The temp file is created in the same
-// directory as path to guarantee the rename is on the same filesystem.
-func writeNetworkFile(path string, tmpl *template.Template, data interface{}) error {
+// deduplicateStrings returns a new slice containing the elements of in with
+// duplicates removed, preserving first-seen order.
+func deduplicateStrings(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// writeFileBytes atomically writes data to path using a temp-file-then-rename
+// strategy so that readers never observe a truncated or partially-written file.
+// The temp file is created in the same directory as path to guarantee the
+// rename is on the same filesystem.
+func writeFileBytes(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".cloud-init-net.*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp file for %s: %w", path, err)
@@ -75,10 +90,9 @@ func writeNetworkFile(path string, tmpl *template.Template, data interface{}) er
 		tmp.Close()
 		return fmt.Errorf("failed to chmod temp file for %s: %w", path, err)
 	}
-
-	if err := tmpl.Execute(tmp, data); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return fmt.Errorf("failed to execute template for %s: %w", path, err)
+		return fmt.Errorf("failed to write temp file for %s: %w", path, err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
@@ -91,6 +105,18 @@ func writeNetworkFile(path string, tmpl *template.Template, data interface{}) er
 		return fmt.Errorf("failed to rename %s to %s: %w", tmpName, path, err)
 	}
 	return nil
+}
+
+// writeNetworkFile renders tmpl with data and atomically writes the result to
+// path using a temp-file-then-rename strategy so that readers never observe a
+// truncated or partially-written file.  The temp file is created in the same
+// directory as path to guarantee the rename is on the same filesystem.
+func writeNetworkFile(path string, tmpl *template.Template, data interface{}) error {
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute template for %s: %w", path, err)
+	}
+	return writeFileBytes(path, buf.Bytes())
 }
 
 const systemdNetworkDir = "/etc/systemd/network"
@@ -183,37 +209,12 @@ func updateResolvConfAt(path string, nameservers []string, searchDomain string) 
 		SearchDomain: searchDomain,
 	}
 
-	// Write to a temp file in the same directory as the target so that the
-	// subsequent rename is guaranteed to be on the same filesystem — and
-	// therefore atomic.  This prevents a window where readers see a truncated
-	// file.
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".resolv.conf.*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file for %s: %w", path, err)
-	}
-	tmpName := tmp.Name()
-	// On any failure path the temp file is removed; after a successful rename
-	// the path no longer exists so os.Remove is a harmless no-op.
-	defer os.Remove(tmpName) //nolint:errcheck
-
-	if err := tmp.Chmod(0644); err != nil {
-		tmp.Close()
-		return fmt.Errorf("failed to chmod temp file for %s: %w", path, err)
-	}
-
-	if err := resolvTmpl.Execute(tmp, resolvData); err != nil {
-		tmp.Close()
+	var buf bytes.Buffer
+	if err := resolvTmpl.Execute(&buf, resolvData); err != nil {
 		return fmt.Errorf("failed to execute resolv.conf template: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("failed to sync temp resolv.conf: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("failed to close temp resolv.conf: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("failed to rename %s to %s: %w", tmpName, path, err)
+	if err := writeFileBytes(path, buf.Bytes()); err != nil {
+		return err
 	}
 	slog.Info("updated DNS configuration", "path", path)
 	return nil
@@ -337,25 +338,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 				return fmt.Errorf("invalid search domain %q", sd)
 			}
 		}
-		// Deduplicate nameservers while preserving first-seen order.
-		seen := make(map[string]struct{}, len(nameservers))
-		deduped := make([]string, 0, len(nameservers))
-		for _, ns := range nameservers {
-			if _, ok := seen[ns]; !ok {
-				seen[ns] = struct{}{}
-				deduped = append(deduped, ns)
-			}
-		}
-		// Deduplicate search domains while preserving first-seen order.
-		seenSD := make(map[string]struct{}, len(searchDomains))
-		dedupedSD := make([]string, 0, len(searchDomains))
-		for _, sd := range searchDomains {
-			if _, ok := seenSD[sd]; !ok {
-				seenSD[sd] = struct{}{}
-				dedupedSD = append(dedupedSD, sd)
-			}
-		}
-		if err := updateResolvConfAt(resolvPath, deduped, strings.Join(dedupedSD, " ")); err != nil {
+		if err := updateResolvConfAt(resolvPath, deduplicateStrings(nameservers), strings.Join(deduplicateStrings(searchDomains), " ")); err != nil {
 			return fmt.Errorf("failed to update resolv.conf: %w", err)
 		}
 	}
@@ -470,25 +453,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 				return fmt.Errorf("invalid search domain %q", sd)
 			}
 		}
-		// Deduplicate nameservers while preserving first-seen order.
-		seen := make(map[string]struct{}, len(nameservers))
-		deduped := make([]string, 0, len(nameservers))
-		for _, ns := range nameservers {
-			if _, ok := seen[ns]; !ok {
-				seen[ns] = struct{}{}
-				deduped = append(deduped, ns)
-			}
-		}
-		// Deduplicate search domains while preserving first-seen order.
-		seenSD := make(map[string]struct{}, len(searchDomains))
-		dedupedSD := make([]string, 0, len(searchDomains))
-		for _, sd := range searchDomains {
-			if _, ok := seenSD[sd]; !ok {
-				seenSD[sd] = struct{}{}
-				dedupedSD = append(dedupedSD, sd)
-			}
-		}
-		if err := updateResolvConfAt(resolvPath, deduped, strings.Join(dedupedSD, " ")); err != nil {
+		if err := updateResolvConfAt(resolvPath, deduplicateStrings(nameservers), strings.Join(deduplicateStrings(searchDomains), " ")); err != nil {
 			return fmt.Errorf("failed to update resolv.conf: %w", err)
 		}
 	}
