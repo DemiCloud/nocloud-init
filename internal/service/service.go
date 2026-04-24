@@ -50,7 +50,7 @@ WantedBy=sysinit.target
 `
 
 var requiredPrograms = []string{
-	"usermod",
+	"chpasswd",
 	"ssh-keygen",
 }
 
@@ -65,7 +65,7 @@ func InstallService() error {
 	}
 
 	servicePath := fmt.Sprintf("%s/%s.service", systemdServiceDir, ServiceName)
-	serviceFile, err := os.Create(servicePath)
+	serviceFile, err := os.OpenFile(servicePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return fmt.Errorf("failed to create service file: %v", err)
 	}
@@ -85,6 +85,8 @@ func InstallService() error {
 	}
 
 	if err := tmpl.Execute(serviceFile, data); err != nil {
+		serviceFile.Close()
+		os.Remove(servicePath)
 		return fmt.Errorf("failed to execute systemd service template: %v", err)
 	}
 
