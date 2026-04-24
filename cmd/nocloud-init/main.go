@@ -91,13 +91,15 @@ Options:
 	}()
 
 	// Graceful CIDATA-missing handling
-	if _, err := mount.MountISO(mountDir); err != nil {
+	device, err := mount.MountISO(mountDir)
+	if err != nil {
 		if errors.Is(err, mount.ErrCIDATANotFound) {
 			log.Printf("No CIDATA device found; skipping cloud-init.")
 			return
 		}
 		log.Fatalf("Failed to mount ISO to %s: %v", mountDir, err)
 	}
+	log.Printf("Mounted CIDATA device %s at %s", device, mountDir)
 	mounted = true
 
 	defer func() {
