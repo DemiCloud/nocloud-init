@@ -672,6 +672,176 @@ func TestGenerateSystemdNetworkConfig_V2NoMAC(t *testing.T) {
 	}
 }
 
+func TestGenerateSystemdNetworkConfig_V1InvalidAddress(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets: []types.NetworkConfigV1Subnet{
+					{Type: "static", Address: "not-an-ip", Netmask: "255.255.255.0", Gateway: "192.0.2.1"},
+				},
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid address, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid address") {
+		t.Errorf("error %q should mention invalid address", err.Error())
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V1InvalidGateway(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets: []types.NetworkConfigV1Subnet{
+					{Type: "static", Address: "192.0.2.10", Netmask: "255.255.255.0", Gateway: "not-an-ip"},
+				},
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid gateway, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid gateway") {
+		t.Errorf("error %q should mention invalid gateway", err.Error())
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V2InvalidGateway4(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:     struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName:   "eth0",
+				Addresses: []string{"192.0.2.10/24"},
+				Gateway4:  "not-an-ip",
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid gateway4, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid gateway4") {
+		t.Errorf("error %q should mention invalid gateway4", err.Error())
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_InvalidNameserver(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"not-an-ip"},
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid nameserver, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid nameserver address") {
+		t.Errorf("error %q should mention invalid nameserver address", err.Error())
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_InvalidSearchDomain(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"192.0.2.1"},
+				Search:  []string{"invalid domain!"},
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid search domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid search domain") {
+		t.Errorf("error %q should mention invalid search domain", err.Error())
+	}
+}
+
+func TestIsValidDomain(t *testing.T) {
+	valid := []string{
+		"example.com",
+		"sub.example.com",
+		"example",
+		"my-host.example.org",
+		strings.Repeat("a", 63) + ".com",
+	}
+	for _, d := range valid {
+		if !isValidDomain(d) {
+			t.Errorf("isValidDomain(%q) = false, want true", d)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"invalid domain",
+		"domain!",
+		"domain\ninjection",
+		"-leading.com",
+		"trailing-.com",
+		"double..dot.com",
+		strings.Repeat("a", 254),
+		strings.Repeat("a", 64) + ".com",
+	}
+	for _, d := range invalid {
+		if isValidDomain(d) {
+			t.Errorf("isValidDomain(%q) = true, want false", d)
+		}
+	}
+}
+
+func TestIsValidIPAddress(t *testing.T) {
+	valid := []string{"192.0.2.1", "10.0.0.1", "::1", "2001:db8::1"}
+	for _, ip := range valid {
+		if !isValidIPAddress(ip) {
+			t.Errorf("isValidIPAddress(%q) = false, want true", ip)
+		}
+	}
+	invalid := []string{"", "not-an-ip", "256.0.0.1", "192.0.2", "example.com"}
+	for _, ip := range invalid {
+		if isValidIPAddress(ip) {
+			t.Errorf("isValidIPAddress(%q) = true, want false", ip)
+		}
+	}
+}
+
 func assertFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	b, err := os.ReadFile(path)
