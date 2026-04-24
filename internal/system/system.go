@@ -36,19 +36,54 @@ func IsValidHostname(s string) bool {
 }
 
 func UpdateHostname(hostname string) error {
-	// 1. Write /etc/hostname
-	if err := os.WriteFile("/etc/hostname", []byte(hostname+"\n"), 0644); err != nil {
+	// 1. Write /etc/hostname atomically so a power failure can't leave a
+	//    zero-length or partially-written file.
+	if err := writeFileAtomic("/etc/hostname", []byte(hostname+"\n"), 0644); err != nil {
 		return fmt.Errorf("failed to write /etc/hostname: %w", err)
 	}
 
-	// 2. Update kernel hostname directly
+	// 2. Update kernel hostname directly.
 	if err := unix.Sethostname([]byte(hostname)); err != nil {
 		return fmt.Errorf("failed to set kernel hostname: %w", err)
 	}
 
-	// 3. Optional: pretty hostname
+	// 3. Optional: pretty hostname (best-effort, non-critical).
 	_ = os.WriteFile("/etc/machine-info", []byte("PRETTY_HOSTNAME="+hostname+"\n"), 0644)
 
+	return nil
+}
+
+// writeFileAtomic writes data to path via a temp file + rename so that
+// readers never observe a truncated file.  The temp file is created in the
+// same directory as path to guarantee the rename is on the same filesystem.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for %s: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	// Remove the temp file on any failure; after a successful rename the path
+	// no longer exists so os.Remove is a harmless no-op.
+	defer os.Remove(tmpName) //nolint:errcheck
+
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to chmod temp file for %s: %w", path, err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to write temp file for %s: %w", path, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to sync temp file for %s: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file for %s: %w", path, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("failed to rename %s to %s: %w", tmpName, path, err)
+	}
 	return nil
 }
 

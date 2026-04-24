@@ -186,3 +186,41 @@ func TestUpdatePasswordCredentialFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hostname")
+	data := []byte("myhost\n")
+
+	if err := writeFileAtomic(path, data, 0644); err != nil {
+		t.Fatalf("writeFileAtomic() error = %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("os.ReadFile: %v", err)
+	}
+	if string(got) != string(data) {
+		t.Errorf("content = %q, want %q", string(got), string(data))
+	}
+
+	// No leftover temp files must remain.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() != "hostname" {
+			t.Errorf("unexpected leftover file: %s", e.Name())
+		}
+	}
+
+	// Permissions must match what was requested.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat: %v", err)
+	}
+	if info.Mode().Perm() != 0644 {
+		t.Errorf("file permissions = %o, want 0644", info.Mode().Perm())
+	}
+}
