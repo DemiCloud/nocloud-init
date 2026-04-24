@@ -1135,6 +1135,57 @@ func TestGenerateSystemdNetworkConfig_V1DuplicateSearchDomains(t *testing.T) {
 	}
 }
 
+// TestCleanStaleCIDataFiles verifies that stale 10-cloud-init-* files from a
+// previous run are removed before new files are written.  This is the
+// correctness property that makes the tool safe to re-run every boot: removing
+// a NIC from the hypervisor UI must not leave a stale .network/.link file
+// that systemd-networkd would try to apply.
+func TestCleanStaleCIDataFiles(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	// Simulate a previous run that had eth0 + eth1.
+	staleFiles := []string{
+		filepath.Join(dir, "10-cloud-init-eth0.network"),
+		filepath.Join(dir, "10-cloud-init-eth0.link"),
+		filepath.Join(dir, "10-cloud-init-eth1.network"),
+		filepath.Join(dir, "10-cloud-init-eth1.link"),
+	}
+	for _, f := range staleFiles {
+		if err := os.WriteFile(f, []byte("# stale\n"), 0644); err != nil {
+			t.Fatalf("failed to create stale file %s: %v", f, err)
+		}
+	}
+
+	// New config: only eth0 remains.
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "52:54:00:ab:cd:ef",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	// eth0 files must be present with new content (not the stale placeholder).
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-eth0.network"), "MACAddress=52:54:00:ab:cd:ef")
+	assertFileNotContains(t, filepath.Join(dir, "10-cloud-init-eth0.network"), "# stale")
+
+	// eth1 files must be gone.
+	for _, name := range []string{"10-cloud-init-eth1.network", "10-cloud-init-eth1.link"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("stale file %s should have been removed", name)
+		}
+	}
+}
+
 func assertFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	b, err := os.ReadFile(path)
