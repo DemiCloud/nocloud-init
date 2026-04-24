@@ -199,14 +199,13 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if err != nil {
 			return fmt.Errorf("failed to create network config file for %s: %v", entry.Name, err)
 		}
-		defer networkFile.Close()
 
 		linkFilePath := fmt.Sprintf("%s/10-cloud-init-%s.link", networkDir, entry.Name)
 		linkFile, err := os.Create(linkFilePath)
 		if err != nil {
+			networkFile.Close()
 			return fmt.Errorf("failed to create link config file for %s: %v", entry.Name, err)
 		}
-		defer linkFile.Close()
 
 		networkData := struct {
 			Address    string
@@ -232,12 +231,22 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		}
 
 		if err := networkTmpl.Execute(networkFile, networkData); err != nil {
+			networkFile.Close()
+			linkFile.Close()
 			return fmt.Errorf("failed to execute network template for %s: %v", entry.Name, err)
+		}
+		if err := networkFile.Close(); err != nil {
+			linkFile.Close()
+			return fmt.Errorf("failed to close network config file for %s: %v", entry.Name, err)
 		}
 		log.Printf("Generated systemd-networkd config for interface %s at %s", entry.Name, networkFilePath)
 
 		if err := linkTmpl.Execute(linkFile, linkData); err != nil {
+			linkFile.Close()
 			return fmt.Errorf("failed to execute link template for %s: %v", entry.Name, err)
+		}
+		if err := linkFile.Close(); err != nil {
+			return fmt.Errorf("failed to close link config file for %s: %v", entry.Name, err)
 		}
 		log.Printf("Generated systemd-networkd link config for interface %s at %s", entry.Name, linkFilePath)
 	}
@@ -298,14 +307,13 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if err != nil {
 			return fmt.Errorf("failed to create network config file for %s: %v", ifaceName, err)
 		}
-		defer networkFile.Close()
 
 		linkFilePath := fmt.Sprintf("%s/10-cloud-init-%s.link", networkDir, ifaceName)
 		linkFile, err := os.Create(linkFilePath)
 		if err != nil {
+			networkFile.Close()
 			return fmt.Errorf("failed to create link config file for %s: %v", ifaceName, err)
 		}
-		defer linkFile.Close()
 
 		networkData := struct {
 			Address    string
@@ -331,12 +339,22 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		}
 
 		if err := networkTmpl.Execute(networkFile, networkData); err != nil {
+			networkFile.Close()
+			linkFile.Close()
 			return fmt.Errorf("failed to execute network template for %s: %v", ifaceName, err)
+		}
+		if err := networkFile.Close(); err != nil {
+			linkFile.Close()
+			return fmt.Errorf("failed to close network config file for %s: %v", ifaceName, err)
 		}
 		log.Printf("Generated systemd-networkd config for interface %s at %s", ifaceName, networkFilePath)
 
 		if err := linkTmpl.Execute(linkFile, linkData); err != nil {
+			linkFile.Close()
 			return fmt.Errorf("failed to execute link template for %s: %v", ifaceName, err)
+		}
+		if err := linkFile.Close(); err != nil {
+			return fmt.Errorf("failed to close link config file for %s: %v", ifaceName, err)
 		}
 		log.Printf("Generated systemd-networkd link config for interface %s at %s", ifaceName, linkFilePath)
 
