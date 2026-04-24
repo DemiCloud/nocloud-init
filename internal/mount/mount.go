@@ -17,7 +17,7 @@ func findCIDATADevice() (string, error) {
 		if os.IsNotExist(err) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.EIO) {
 			return "", ErrCIDATANotFound
 		}
-		return "", ErrCIDATANotFound
+		return "", fmt.Errorf("ReadDir /dev/disk/by-label: %w", err)
 	}
 
 	for _, e := range entries {

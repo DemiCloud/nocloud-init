@@ -34,7 +34,9 @@ MACAddress={{.MacAddress}}
 DHCP=yes
 {{- else }}
 Address={{.Address}}/{{.CIDR}}
+{{- if .Gateway }}
 Gateway={{.Gateway}}
+{{- end }}
 {{- end }}
 `
 
@@ -167,7 +169,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 	var searchDomain string
 	for _, entry := range config.Config {
 		if entry.Type == "nameserver" {
-			nameservers = entry.Address
+			nameservers = append(nameservers, entry.Address...)
 			searchDomain = strings.Join(entry.Search, " ")
 		}
 	}
@@ -254,8 +256,10 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		slog.Info("generated link config", "interface", entry.Name, "path", linkFilePath)
 	}
 
-	if err := updateResolvConfAt(resolvPath, nameservers, searchDomain); err != nil {
-		return fmt.Errorf("failed to update resolv.conf: %v", err)
+	if len(nameservers) > 0 {
+		if err := updateResolvConfAt(resolvPath, nameservers, searchDomain); err != nil {
+			return fmt.Errorf("failed to update resolv.conf: %v", err)
+		}
 	}
 	return nil
 }

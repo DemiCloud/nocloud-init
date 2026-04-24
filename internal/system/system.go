@@ -69,6 +69,9 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 	if !userData.ManageEtcHosts {
 		return nil
 	}
+	if userData.Hostname == "" {
+		return nil
+	}
 
 	var loopbackEntry string
 	if userData.FQDN != "" {
