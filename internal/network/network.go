@@ -183,6 +183,9 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			return fmt.Errorf("invalid interface name %q: must match [a-zA-Z0-9:_-]+", entry.Name)
 		}
 
+		if len(entry.Subnets) > 1 {
+			log.Printf("WARNING: interface %s has %d subnets; only the first will be configured", entry.Name, len(entry.Subnets))
+		}
 		subnet := entry.Subnets[0]
 		useDHCP := subnet.Type == "dhcp4"
 
@@ -295,6 +298,9 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if !eth.DHCP4 {
 			if len(eth.Addresses) == 0 {
 				return fmt.Errorf("interface %s: no addresses and dhcp4 not set", ifaceName)
+			}
+			if len(eth.Addresses) > 1 {
+				log.Printf("WARNING: interface %s has %d addresses; only the first will be configured", ifaceName, len(eth.Addresses))
 			}
 			address, cidr, err = parseCIDRAddress(eth.Addresses[0])
 			if err != nil {
