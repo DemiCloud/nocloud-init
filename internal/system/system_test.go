@@ -21,6 +21,9 @@ func TestIsValidHostname(t *testing.T) {
 		{"host123", true},
 		{"123host", true},
 		{"a", true},
+		// uppercase letters are permitted (RFC 952 is case-insensitive)
+		{"MyHost", true},
+		{"MyHost123.Example.COM", true},
 		// invalid
 		{"", false},
 		{"host_name", false},
@@ -152,6 +155,22 @@ func TestUpdateHostsFile(t *testing.T) {
 			wantContains: []string{"127.0.0.1 localhost"},
 			wantAbsent:   []string{"127.0.1.1"},
 		},
+		{
+			// Multiple pre-existing 127.0.1.1 lines must all be removed and
+			// replaced with exactly one correct entry.
+			name: "removes all existing 127.0.1.1 entries",
+			initialHosts: `127.0.1.1 oldhost1
+127.0.1.1 oldhost2.example.com oldhost2
+127.0.0.1 localhost
+`,
+			userData: types.UserData{
+				ManageEtcHosts: true,
+				Hostname:       "newhost",
+				FQDN:           "newhost.example.com",
+			},
+			wantContains: []string{"127.0.1.1 newhost.example.com newhost", "127.0.0.1 localhost"},
+			wantAbsent:   []string{"oldhost1", "oldhost2"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -251,6 +270,17 @@ func TestWriteFileAtomic(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0644 {
 		t.Errorf("file permissions = %o, want 0644", info.Mode().Perm())
+	}
+}
+
+// TestUpdateHostsFileAt_MissingFile verifies that updateHostsFileAt returns an
+// error when the target hosts file does not exist, rather than creating it
+// silently (preserving the invariant that /etc/hosts must already be present).
+func TestUpdateHostsFileAt_MissingFile(t *testing.T) {
+	ud := types.UserData{ManageEtcHosts: true, Hostname: "myhost"}
+	err := updateHostsFileAt(filepath.Join(t.TempDir(), "nonexistent-hosts"), ud)
+	if err == nil {
+		t.Fatal("expected error for nonexistent hosts file, got nil")
 	}
 }
 
