@@ -383,6 +383,52 @@ func TestGenerateSystemdNetworkConfig_UnsupportedVersion(t *testing.T) {
 	}
 }
 
+func TestUpdateResolvConfAt_AtomicWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resolv.conf")
+
+	if err := updateResolvConfAt(path, []string{"1.1.1.1", "8.8.8.8"}, "example.com"); err != nil {
+		t.Fatalf("updateResolvConfAt() error = %v", err)
+	}
+
+	// Target must exist with expected content.
+	assertFileContains(t, path, "nameserver 1.1.1.1")
+	assertFileContains(t, path, "nameserver 8.8.8.8")
+	assertFileContains(t, path, "search example.com")
+
+	// No temp files must be left behind in the directory.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if e.Name() != "resolv.conf" {
+			t.Errorf("unexpected leftover file in dir: %s", e.Name())
+		}
+	}
+}
+
+func TestUpdateResolvConfAt_SymlinkRejected(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real-resolv.conf")
+	link := filepath.Join(dir, "resolv.conf")
+
+	if err := os.WriteFile(target, []byte("# real\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+
+	err := updateResolvConfAt(link, []string{"1.1.1.1"}, "example.com")
+	if err == nil {
+		t.Fatal("expected error for symlink target, got nil")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("error %q should mention symlink", err.Error())
+	}
+}
+
 func assertFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	b, err := os.ReadFile(path)
