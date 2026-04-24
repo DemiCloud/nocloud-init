@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 
 	"github.com/spf13/pflag"
@@ -110,7 +111,7 @@ Options:
 
 	log.Printf("Mounted device with CIDATA label to %s", mountDir)
 
-	userDataPath := mountDir + "/user-data"
+	userDataPath := filepath.Join(mountDir, "user-data")
 	var userData types.UserData
 	userDataContent, err := os.ReadFile(userDataPath)
 	if err != nil && !os.IsNotExist(err) {
@@ -156,7 +157,7 @@ Options:
 		log.Fatalf("Failed to update /etc/hosts: %v", err)
 	}
 
-	networkConfigPath := mountDir + "/network-config"
+	networkConfigPath := filepath.Join(mountDir, "network-config")
 	networkConfigData, err := os.ReadFile(networkConfigPath)
 	if err != nil && !os.IsNotExist(err) {
 		log.Fatalf("Failed to read network-config from %s: %v", networkConfigPath, err)
