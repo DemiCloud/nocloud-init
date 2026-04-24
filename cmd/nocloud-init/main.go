@@ -111,21 +111,25 @@ Options:
 	log.Printf("Mounted device with CIDATA label to %s", mountDir)
 
 	userDataPath := mountDir + "/user-data"
+	var userData types.UserData
 	userDataContent, err := os.ReadFile(userDataPath)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		log.Fatalf("Failed to read user-data from %s: %v", userDataPath, err)
 	}
-	log.Printf("Read user-data from %s", userDataPath)
+	if err == nil {
+		log.Printf("Read user-data from %s", userDataPath)
 
-	var userData types.UserData
-	if err := types.UnmarshalUserData(userDataContent, &userData); err != nil {
-		log.Fatalf("Failed to parse user-data: %v", err)
+		if err := types.UnmarshalUserData(userDataContent, &userData); err != nil {
+			log.Fatalf("Failed to parse user-data: %v", err)
+		}
+		safeUserData := userData
+		if safeUserData.Password != "" {
+			safeUserData.Password = "[REDACTED]"
+		}
+		log.Printf("Parsed user-data: %+v", safeUserData)
+	} else {
+		log.Printf("No user-data found at %s, skipping user-data configuration", userDataPath)
 	}
-	safeUserData := userData
-	if safeUserData.Password != "" {
-		safeUserData.Password = "[REDACTED]"
-	}
-	log.Printf("Parsed user-data: %+v", safeUserData)
 
 	if userData.Hostname != "" && !system.IsValidHostname(userData.Hostname) {
 		log.Fatalf("Invalid hostname %q: must contain only letters, digits, hyphens, and dots", userData.Hostname)
