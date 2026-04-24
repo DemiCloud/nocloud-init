@@ -142,6 +142,7 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 	if err != nil {
 		return fmt.Errorf("failed to open %s: %v", hostsPath, err)
 	}
+	defer file.Close()
 
 	var lines []string
 	scanner := bufio.NewScanner(file)
@@ -153,7 +154,6 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 		}
 		lines = append(lines, line)
 	}
-	file.Close()
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading %s: %v", hostsPath, err)
 	}
