@@ -140,7 +140,7 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 
 	file, err := os.Open(hostsPath)
 	if err != nil {
-		return fmt.Errorf("failed to open %s: %v", hostsPath, err)
+		return fmt.Errorf("failed to open %s: %w", hostsPath, err)
 	}
 	defer file.Close()
 
@@ -155,7 +155,7 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 		lines = append(lines, line)
 	}
 	if err := scanner.Err(); err != nil {
-		return fmt.Errorf("error reading %s: %v", hostsPath, err)
+		return fmt.Errorf("error reading %s: %w", hostsPath, err)
 	}
 
 	// Prepend the correct entry
@@ -165,12 +165,17 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 	// (same filesystem guaranteed).
 	tmp, err := os.CreateTemp(filepath.Dir(hostsPath), ".hosts.*")
 	if err != nil {
-		return fmt.Errorf("failed to create temp file for %s: %v", hostsPath, err)
+		return fmt.Errorf("failed to create temp file for %s: %w", hostsPath, err)
 	}
 	tmpName := tmp.Name()
 	// Clean up the temp file on any failure path; after a successful rename
 	// the path no longer exists so os.Remove is a harmless no-op.
 	defer os.Remove(tmpName) //nolint:errcheck
+
+	if err := tmp.Chmod(0644); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to chmod temp hosts file: %w", err)
+	}
 
 	writer := bufio.NewWriter(tmp)
 	for _, line := range lines {
@@ -178,17 +183,17 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 	}
 	if err := writer.Flush(); err != nil {
 		tmp.Close()
-		return fmt.Errorf("failed to write temp hosts file: %v", err)
+		return fmt.Errorf("failed to write temp hosts file: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return fmt.Errorf("failed to sync temp hosts file: %v", err)
+		return fmt.Errorf("failed to sync temp hosts file: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("failed to close temp hosts file: %v", err)
+		return fmt.Errorf("failed to close temp hosts file: %w", err)
 	}
 	if err := os.Rename(tmpName, hostsPath); err != nil {
-		return fmt.Errorf("failed to rename %s to %s: %v", tmpName, hostsPath, err)
+		return fmt.Errorf("failed to rename %s to %s: %w", tmpName, hostsPath, err)
 	}
 
 	slog.Info("updated hosts file", "path", hostsPath)

@@ -842,6 +842,142 @@ func TestIsValidIPAddress(t *testing.T) {
 	}
 }
 
+// TestGeneratedNetworkFilesHaveCorrectPermissions verifies that network config
+// files written by writeNetworkFile and updateResolvConfAt are created with
+// mode 0644, not the default 0600 from os.CreateTemp.
+func TestGeneratedNetworkFilesHaveCorrectPermissions(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "52:54:00:ab:cd:ef",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"192.0.2.1"},
+				Search:  []string{"example.com"},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	checkPerm := func(path string) {
+		t.Helper()
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("os.Stat(%s): %v", path, err)
+		}
+		if got := info.Mode().Perm(); got != 0644 {
+			t.Errorf("%s: permissions = %04o, want 0644", filepath.Base(path), got)
+		}
+	}
+	checkPerm(filepath.Join(dir, "10-cloud-init-eth0.network"))
+	checkPerm(filepath.Join(dir, "10-cloud-init-eth0.link"))
+	checkPerm(resolvPath)
+}
+
+// TestGenerateSystemdNetworkConfig_V2DuplicateSearchDomains verifies that when
+// two interfaces share a search domain, only one entry appears in resolv.conf.
+func TestGenerateSystemdNetworkConfig_V2DuplicateSearchDomains(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	sharedNS := struct {
+		Addresses []string `yaml:"addresses" json:"addresses"`
+		Search    []string `yaml:"search" json:"search"`
+	}{
+		Addresses: []string{"192.0.2.1"},
+		Search:    []string{"example.com"},
+	}
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:       struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "52:54:00:11:22:33"},
+				SetName:     "eth0",
+				DHCP4:       true,
+				Nameservers: sharedNS,
+			},
+			"eth1": {
+				Match:       struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "52:54:00:44:55:66"},
+				SetName:     "eth1",
+				DHCP4:       true,
+				Nameservers: sharedNS,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	content, err := os.ReadFile(resolvPath)
+	if err != nil {
+		t.Fatalf("failed to read resolv.conf: %v", err)
+	}
+	got := string(content)
+
+	// The shared search domain must appear exactly once.
+	count := strings.Count(got, "example.com")
+	if count != 1 {
+		t.Errorf("expected exactly 1 occurrence of 'example.com', got %d\n%s", count, got)
+	}
+}
+
+// TestGenerateSystemdNetworkConfig_V1DuplicateSearchDomains verifies that
+// duplicate search domains from multiple nameserver entries are collapsed.
+func TestGenerateSystemdNetworkConfig_V1DuplicateSearchDomains(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"192.0.2.1"},
+				Search:  []string{"example.com"},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"192.0.2.2"},
+				Search:  []string{"example.com"}, // duplicate
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	content, err := os.ReadFile(resolvPath)
+	if err != nil {
+		t.Fatalf("failed to read resolv.conf: %v", err)
+	}
+	got := string(content)
+
+	count := strings.Count(got, "example.com")
+	if count != 1 {
+		t.Errorf("expected exactly 1 occurrence of 'example.com', got %d\n%s", count, got)
+	}
+}
+
 func assertFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	b, err := os.ReadFile(path)
