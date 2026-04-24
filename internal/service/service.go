@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"os"
@@ -56,6 +57,7 @@ var requiredPrograms = []string{
 
 var requiredDirectories = []string{
 	systemdNetworkDir,
+	systemdServiceDir,
 }
 
 func InstallService() error {
@@ -63,13 +65,6 @@ func InstallService() error {
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %v", err)
 	}
-
-	servicePath := fmt.Sprintf("%s/%s.service", systemdServiceDir, ServiceName)
-	serviceFile, err := os.OpenFile(servicePath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to create service file: %v", err)
-	}
-	defer serviceFile.Close()
 
 	tmpl, err := template.New("systemdService").Parse(systemdServiceTemplate)
 	if err != nil {
@@ -84,15 +79,14 @@ func InstallService() error {
 		ServiceName: ServiceName,
 	}
 
-	if err := tmpl.Execute(serviceFile, data); err != nil {
-		serviceFile.Close()
-		os.Remove(servicePath)
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
 		return fmt.Errorf("failed to execute systemd service template: %v", err)
 	}
-	if err := serviceFile.Sync(); err != nil {
-		serviceFile.Close()
-		os.Remove(servicePath)
-		return fmt.Errorf("failed to sync service file: %v", err)
+
+	servicePath := fmt.Sprintf("%s/%s.service", systemdServiceDir, ServiceName)
+	if err := os.WriteFile(servicePath, buf.Bytes(), 0644); err != nil {
+		return fmt.Errorf("failed to write service file: %v", err)
 	}
 
 	slog.Info("installed systemd service", "path", servicePath)
