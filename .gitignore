@@ -26,6 +26,9 @@ go.work.sum
 # Environment files
 .env
 
+# Scratch directory
+/scratch/
+
 # Editor/OS junk (optional)
 *.swp
 *.swo

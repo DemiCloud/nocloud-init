@@ -80,7 +80,7 @@ manage_etc_hosts: true
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var ud UserData
-			err := UnmarshalUserData([]byte(tt.input), &ud)
+			err := UnmarshalUserData([]byte(tt.input), &ud, false)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("UnmarshalUserData() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -212,7 +212,7 @@ config:
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var nc NetworkConfig
-			err := UnmarshalNetworkConfig([]byte(tt.input), &nc)
+			err := UnmarshalNetworkConfig([]byte(tt.input), &nc, false)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("UnmarshalNetworkConfig() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -330,7 +330,7 @@ type v2Want struct {
 // nameserver entry.
 func TestUnmarshalNetworkConfig_MultiNIC(t *testing.T) {
 	var nc NetworkConfig
-	if err := UnmarshalNetworkConfig([]byte(mustReadFile(t, "testdata/proxmox-network-config-multi-nic.yaml")), &nc); err != nil {
+	if err := UnmarshalNetworkConfig([]byte(mustReadFile(t, "testdata/proxmox-network-config-multi-nic.yaml")), &nc, false); err != nil {
 		t.Fatalf("UnmarshalNetworkConfig() error = %v", err)
 	}
 
@@ -380,7 +380,7 @@ func TestUnmarshalNetworkConfig_MultiNIC(t *testing.T) {
 // neither valid YAML nor valid JSON, the error message includes both errors.
 func TestUnmarshalUserData_ErrorContainsBothFormats(t *testing.T) {
 	var ud UserData
-	err := UnmarshalUserData([]byte("}{:::not yaml or json:::"), &ud)
+	err := UnmarshalUserData([]byte("}{:::not yaml or json:::"), &ud, false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -397,7 +397,7 @@ func TestUnmarshalUserData_ErrorContainsBothFormats(t *testing.T) {
 // is neither valid YAML nor valid JSON, the error message includes both errors.
 func TestUnmarshalNetworkConfig_ErrorContainsBothFormats(t *testing.T) {
 	var nc NetworkConfig
-	err := UnmarshalNetworkConfig([]byte("}{:::not yaml or json:::"), &nc)
+	err := UnmarshalNetworkConfig([]byte("}{:::not yaml or json:::"), &nc, false)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -410,8 +410,41 @@ func TestUnmarshalNetworkConfig_ErrorContainsBothFormats(t *testing.T) {
 	}
 }
 
-func mustReadFile(t *testing.T, path string) string {
-	t.Helper()
+// TestUnmarshalStrict verifies that strict=true rejects unknown YAML fields
+// and that strict=false continues to accept them.
+func TestUnmarshalStrict(t *testing.T) {
+	withUnknown := mustReadFile(t, "testdata/proxmox-user-data.yaml")
+
+	t.Run("user-data strict rejects unknown fields", func(t *testing.T) {
+		var ud UserData
+		if err := UnmarshalUserData([]byte(withUnknown), &ud, true); err == nil {
+			t.Fatal("expected error for unknown field in strict mode, got nil")
+		}
+	})
+
+	t.Run("user-data non-strict accepts unknown fields", func(t *testing.T) {
+		var ud UserData
+		if err := UnmarshalUserData([]byte(withUnknown), &ud, false); err != nil {
+			t.Fatalf("unexpected error in non-strict mode: %v", err)
+		}
+		if ud.Hostname != "test-vm-01" {
+			t.Errorf("Hostname = %q, want %q", ud.Hostname, "test-vm-01")
+		}
+	})
+
+	t.Run("network-config strict accepts clean YAML", func(t *testing.T) {
+		input := mustReadFile(t, "testdata/proxmox-network-config.yaml")
+		var nc NetworkConfig
+		if err := UnmarshalNetworkConfig([]byte(input), &nc, true); err != nil {
+			t.Fatalf("unexpected error for clean YAML in strict mode: %v", err)
+		}
+		if nc.Version != 1 {
+			t.Errorf("Version = %d, want 1", nc.Version)
+		}
+	})
+}
+
+func mustReadFile(t *testing.T, path string) string {	t.Helper()
 	b, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("failed to read testdata file %q: %v", path, err)

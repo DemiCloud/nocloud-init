@@ -38,6 +38,7 @@ func main() {
 	versionFlag := pflag.BoolP("version", "V", false, "Display version information")
 	installFlag := pflag.BoolP("install", "i", false, "Install systemd service")
 	verboseFlag := pflag.BoolP("verbose", "v", false, "Enable verbose (debug) logging")
+	strictFlag := pflag.BoolP("strict", "s", false, "Reject unknown fields in user-data and network-config")
 	pflag.Parse()
 
 	logLevel := slog.LevelInfo
@@ -61,6 +62,7 @@ func main() {
 Options:
   -h, --help       Display help information
   -i, --install    Install systemd service
+  -s, --strict     Reject unknown fields in user-data and network-config
   -v, --verbose    Enable verbose (debug) logging
   -V, --version    Display version information`,
 			service.ServiceName, version, service.ServiceDescription)
@@ -140,7 +142,7 @@ Options:
 	if err == nil {
 		slog.Info("read user-data", "path", userDataPath)
 
-		if err := types.UnmarshalUserData(userDataContent, &userData); err != nil {
+		if err := types.UnmarshalUserData(userDataContent, &userData, *strictFlag); err != nil {
 			slog.Error("failed to parse user-data", "error", err)
 			os.Exit(1)
 		}
@@ -193,7 +195,7 @@ Options:
 		slog.Info("read network-config", "path", networkConfigPath)
 
 		var networkConfig types.NetworkConfig
-		if err := types.UnmarshalNetworkConfig(networkConfigData, &networkConfig); err != nil {
+		if err := types.UnmarshalNetworkConfig(networkConfigData, &networkConfig, *strictFlag); err != nil {
 			slog.Error("failed to parse network-config", "error", err)
 			os.Exit(1)
 		}
