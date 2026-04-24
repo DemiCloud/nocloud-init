@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
-	"no-cloud/internal/types"
+	"github.com/demicloud/nocloud-init/internal/types"
 )
 
 const sshKeyPath = "/etc/ssh/ssh_host_rsa_key"
@@ -44,7 +44,11 @@ func UpdateHostname(hostname string) error {
 }
 
 func UpdatePassword(user, hashedPassword string) error {
-	cmd := exec.Command("usermod", "-p", hashedPassword, user)
+	return updatePasswordCmd(exec.Command("chpasswd", "-e"), user, hashedPassword)
+}
+
+func updatePasswordCmd(cmd *exec.Cmd, user, hashedPassword string) error {
+	cmd.Stdin = strings.NewReader(user + ":" + hashedPassword + "\n")
 	return cmd.Run()
 }
 

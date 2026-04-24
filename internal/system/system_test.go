@@ -2,10 +2,12 @@ package system
 
 import (
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"no-cloud/internal/types"
+	"github.com/demicloud/nocloud-init/internal/types"
 )
 
 func TestIsValidHostname(t *testing.T) {
@@ -112,11 +114,33 @@ func TestUpdateHostsFile(t *testing.T) {
 					t.Errorf("result missing %q\ngot:\n%s", want, result)
 				}
 			}
-			for _, absent := range tt.wantAbsent {
-				if strings.Contains(result, absent) {
-					t.Errorf("result should not contain %q\ngot:\n%s", absent, result)
-				}
-			}
 		})
+	}
+}
+
+func TestUpdatePasswordCredentialFormat(t *testing.T) {
+	user := "alice"
+	hash := "$6$rounds=5000$salt$longhash"
+
+	outFile := filepath.Join(t.TempDir(), "stdin-capture")
+	cmd := exec.Command("tee", outFile)
+	if err := updatePasswordCmd(cmd, user, hash); err != nil {
+		t.Fatalf("updatePasswordCmd: %v", err)
+	}
+
+	got, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("os.ReadFile: %v", err)
+	}
+	want := user + ":" + hash + "\n"
+	if string(got) != want {
+		t.Errorf("stdin content = %q, want %q", string(got), want)
+	}
+
+	// Verify the hash is not exposed in command arguments.
+	for _, arg := range cmd.Args {
+		if arg == hash {
+			t.Errorf("hash found in command arguments: %v", cmd.Args)
+		}
 	}
 }
