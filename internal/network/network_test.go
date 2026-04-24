@@ -146,6 +146,11 @@ func TestGenerateSystemdNetworkConfig_V1DHCP(t *testing.T) {
 	assertFileContains(t, networkFile, "DHCP=yes")
 	assertFileNotContains(t, networkFile, "\nAddress=")
 	assertFileNotContains(t, networkFile, "Gateway=")
+
+	// resolv.conf must not be created when no nameservers are specified.
+	if _, err := os.Stat(resolvPath); !os.IsNotExist(err) {
+		t.Errorf("resolv.conf should not be created when no nameservers are present")
+	}
 }
 
 func TestGenerateSystemdNetworkConfig_V2Static(t *testing.T) {
@@ -290,6 +295,42 @@ func TestGenerateSystemdNetworkConfig_V1MultiNIC(t *testing.T) {
 	// shared nameserver
 	assertFileContains(t, resolvPath, "nameserver 192.0.2.1")
 	assertFileContains(t, resolvPath, "search example.com")
+}
+
+// TestGenerateSystemdNetworkConfig_V1MultipleNameserverEntries verifies that
+// two separate nameserver entries are merged rather than the last one winning.
+func TestGenerateSystemdNetworkConfig_V1MultipleNameserverEntries(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"192.0.2.1"},
+				Search:  []string{"example.com"},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"192.0.2.2"},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	// Both nameservers must appear — the second entry must not overwrite the first.
+	assertFileContains(t, resolvPath, "nameserver 192.0.2.1")
+	assertFileContains(t, resolvPath, "nameserver 192.0.2.2")
 }
 
 func TestGenerateSystemdNetworkConfig_V1InvalidMAC(t *testing.T) {
