@@ -90,6 +90,28 @@ func unmarshalYAML(data []byte, v interface{}, strict bool) error {
 	return yaml.Unmarshal(data, v)
 }
 
+// MetaData holds cloud-provided instance metadata from the NoCloud meta-data
+// file. The instance-id field is required by the NoCloud spec. local-hostname
+// (or hostname) may be used as a fallback hostname when user-data does not
+// specify one.
+type MetaData struct {
+	InstanceID    string `yaml:"instance-id" json:"instance-id"`
+	LocalHostname string `yaml:"local-hostname" json:"local-hostname"`
+	Hostname      string `yaml:"hostname" json:"hostname"`
+}
+
+func UnmarshalMetaData(data []byte, md *MetaData, strict bool) error {
+	yamlErr := unmarshalYAML(data, md, strict)
+	if yamlErr == nil {
+		return nil
+	}
+	if err := unmarshalJSON(data, md, strict); err == nil {
+		return nil
+	} else {
+		return fmt.Errorf("yaml: %v; json: %v", yamlErr, err)
+	}
+}
+
 func UnmarshalUserData(data []byte, ud *UserData, strict bool) error {
 	yamlErr := unmarshalYAML(data, ud, strict)
 	if yamlErr == nil {
