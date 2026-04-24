@@ -38,7 +38,8 @@ func MountISO(mountPoint string) (string, error) {
 		return "", err
 	}
 
-	if err := unix.Mount(device, mountPoint, "iso9660", unix.MS_RDONLY, ""); err != nil {
+	const flags = unix.MS_RDONLY | unix.MS_NOEXEC | unix.MS_NOSUID | unix.MS_NODEV
+	if err := unix.Mount(device, mountPoint, "iso9660", flags, ""); err != nil {
 		return "", fmt.Errorf("failed to mount %s: %v", device, err)
 	}
 
