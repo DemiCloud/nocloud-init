@@ -253,3 +253,29 @@ func TestWriteFileAtomic(t *testing.T) {
 		t.Errorf("file permissions = %o, want 0644", info.Mode().Perm())
 	}
 }
+
+// TestUpdateHostsFile_Permissions verifies that updateHostsFileAt writes the
+// resulting /etc/hosts with mode 0644 so non-root processes can read it.
+func TestUpdateHostsFile_Permissions(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "hosts")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	if _, err := f.WriteString("127.0.0.1 localhost\n"); err != nil {
+		t.Fatalf("failed to write initial hosts: %v", err)
+	}
+	f.Close()
+
+	ud := types.UserData{ManageEtcHosts: true, Hostname: "myhost"}
+	if err := updateHostsFileAt(f.Name(), ud); err != nil {
+		t.Fatalf("updateHostsFileAt() error = %v", err)
+	}
+
+	info, err := os.Stat(f.Name())
+	if err != nil {
+		t.Fatalf("os.Stat: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0644 {
+		t.Errorf("hosts file permissions = %04o, want 0644", got)
+	}
+}
