@@ -89,6 +89,11 @@ func InstallService() error {
 		os.Remove(servicePath)
 		return fmt.Errorf("failed to execute systemd service template: %v", err)
 	}
+	if err := serviceFile.Sync(); err != nil {
+		serviceFile.Close()
+		os.Remove(servicePath)
+		return fmt.Errorf("failed to sync service file: %v", err)
+	}
 
 	slog.Info("installed systemd service", "path", servicePath)
 
