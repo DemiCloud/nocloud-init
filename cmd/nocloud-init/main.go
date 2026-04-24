@@ -3,7 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -34,12 +34,25 @@ func printVersion() {
 }
 
 func main() {
-	log.SetFlags(0)
-
 	helpFlag := pflag.BoolP("help", "h", false, "Display help information")
 	versionFlag := pflag.BoolP("version", "V", false, "Display version information")
 	installFlag := pflag.BoolP("install", "i", false, "Install systemd service")
+	verboseFlag := pflag.BoolP("verbose", "v", false, "Enable verbose (debug) logging")
 	pflag.Parse()
+
+	logLevel := slog.LevelInfo
+	if *verboseFlag {
+		logLevel = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logLevel,
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	})))
 
 	if *helpFlag {
 		helpText := fmt.Sprintf(`%s %s
@@ -48,6 +61,7 @@ func main() {
 Options:
   -h, --help       Display help information
   -i, --install    Install systemd service
+  -v, --verbose    Enable verbose (debug) logging
   -V, --version    Display version information`,
 			service.ServiceName, version, service.ServiceDescription)
 
@@ -62,22 +76,26 @@ Options:
 
 	if *installFlag {
 		if err := service.CheckPrograms(); err != nil {
-			log.Fatalf("Failed to check required programs: %v", err)
+			slog.Error("failed to check required programs", "error", err)
+			os.Exit(1)
 		}
 		if err := service.CheckDirectories(); err != nil {
-			log.Fatalf("Failed to check required directories: %v", err)
+			slog.Error("failed to check required directories", "error", err)
+			os.Exit(1)
 		}
 		if err := service.InstallService(); err != nil {
-			log.Fatalf("Failed to install systemd service: %v", err)
+			slog.Error("failed to install systemd service", "error", err)
+			os.Exit(1)
 		}
 		return
 	}
 
-	log.Printf("Starting %s...", service.ServiceName)
+	slog.Info("starting", "service", service.ServiceName)
 
 	mountDir, err := os.MkdirTemp("", "cloud-init-")
 	if err != nil {
-		log.Fatalf("Failed to create temporary directory: %v", err)
+		slog.Error("failed to create temporary directory", "error", err)
+		os.Exit(1)
 	}
 
 	// Only remove the directory if we never mounted anything
@@ -85,7 +103,7 @@ Options:
 	defer func() {
 		if !mounted {
 			if err := os.RemoveAll(mountDir); err != nil {
-				log.Printf("Failed to remove temporary directory %s: %v", mountDir, err)
+				slog.Warn("failed to remove temporary directory", "path", mountDir, "error", err)
 			}
 		}
 	}()
@@ -94,95 +112,105 @@ Options:
 	device, err := mount.MountISO(mountDir)
 	if err != nil {
 		if errors.Is(err, mount.ErrCIDATANotFound) {
-			log.Printf("No CIDATA device found; skipping cloud-init.")
+			slog.Info("no CIDATA device found, skipping")
 			return
 		}
-		log.Fatalf("Failed to mount ISO to %s: %v", mountDir, err)
+		slog.Error("failed to mount ISO", "mountPoint", mountDir, "error", err)
+		os.Exit(1)
 	}
-	log.Printf("Mounted CIDATA device %s at %s", device, mountDir)
+	slog.Info("mounted CIDATA device", "device", device, "mountPoint", mountDir)
 	mounted = true
 
 	defer func() {
 		if err := mount.UnmountISO(mountDir); err != nil {
-			log.Printf("Failed to unmount %s: %v", mountDir, err)
+			slog.Warn("failed to unmount", "path", mountDir, "error", err)
 		}
 		if err := os.RemoveAll(mountDir); err != nil {
-			log.Printf("Failed to remove temporary directory %s: %v", mountDir, err)
+			slog.Warn("failed to remove temporary directory", "path", mountDir, "error", err)
 		}
 	}()
-
-	log.Printf("Mounted device with CIDATA label to %s", mountDir)
 
 	userDataPath := filepath.Join(mountDir, "user-data")
 	var userData types.UserData
 	userDataContent, err := os.ReadFile(userDataPath)
 	if err != nil && !os.IsNotExist(err) {
-		log.Fatalf("Failed to read user-data from %s: %v", userDataPath, err)
+		slog.Error("failed to read user-data", "path", userDataPath, "error", err)
+		os.Exit(1)
 	}
 	if err == nil {
-		log.Printf("Read user-data from %s", userDataPath)
+		slog.Info("read user-data", "path", userDataPath)
 
 		if err := types.UnmarshalUserData(userDataContent, &userData); err != nil {
-			log.Fatalf("Failed to parse user-data: %v", err)
+			slog.Error("failed to parse user-data", "error", err)
+			os.Exit(1)
 		}
 		safeUserData := userData
 		if safeUserData.Password != "" {
 			safeUserData.Password = "[REDACTED]"
 		}
-		log.Printf("Parsed user-data: %+v", safeUserData)
+		slog.Debug("parsed user-data", "userData", safeUserData)
 	} else {
-		log.Printf("No user-data found at %s, skipping user-data configuration", userDataPath)
+		slog.Info("no user-data found, skipping", "path", userDataPath)
 	}
 
 	if userData.Hostname != "" && !system.IsValidHostname(userData.Hostname) {
-		log.Fatalf("Invalid hostname %q: must contain only letters, digits, hyphens, and dots", userData.Hostname)
+		slog.Error("invalid hostname", "hostname", userData.Hostname)
+		os.Exit(1)
 	}
 	if userData.FQDN != "" && !system.IsValidHostname(userData.FQDN) {
-		log.Fatalf("Invalid fqdn %q: must contain only letters, digits, hyphens, and dots", userData.FQDN)
+		slog.Error("invalid FQDN", "fqdn", userData.FQDN)
+		os.Exit(1)
 	}
 
 	if userData.Hostname != "" {
 		if err := system.UpdateHostname(userData.Hostname); err != nil {
-			log.Fatalf("Failed to update hostname: %v", err)
+			slog.Error("failed to update hostname", "error", err)
+			os.Exit(1)
 		}
-		log.Printf("Updated hostname to %s", userData.Hostname)
+		slog.Info("updated hostname", "hostname", userData.Hostname)
 	}
 
 	if userData.User != "" && userData.Password != "" {
 		if err := system.UpdatePassword(userData.User, userData.Password); err != nil {
-			log.Fatalf("Failed to update password for user %s: %v", userData.User, err)
+			slog.Error("failed to update password", "user", userData.User, "error", err)
+			os.Exit(1)
 		}
-		log.Printf("Updated password for user %s", userData.User)
+		slog.Info("updated password", "user", userData.User)
 	}
 
 	if err := system.UpdateHostsFile(userData); err != nil {
-		log.Fatalf("Failed to update /etc/hosts: %v", err)
+		slog.Error("failed to update /etc/hosts", "error", err)
+		os.Exit(1)
 	}
 
 	networkConfigPath := filepath.Join(mountDir, "network-config")
 	networkConfigData, err := os.ReadFile(networkConfigPath)
 	if err != nil && !os.IsNotExist(err) {
-		log.Fatalf("Failed to read network-config from %s: %v", networkConfigPath, err)
+		slog.Error("failed to read network-config", "path", networkConfigPath, "error", err)
+		os.Exit(1)
 	}
 	if err == nil {
-		log.Printf("Read network-config from %s", networkConfigPath)
+		slog.Info("read network-config", "path", networkConfigPath)
 
 		var networkConfig types.NetworkConfig
 		if err := types.UnmarshalNetworkConfig(networkConfigData, &networkConfig); err != nil {
-			log.Fatalf("Failed to parse network-config: %v", err)
+			slog.Error("failed to parse network-config", "error", err)
+			os.Exit(1)
 		}
-		log.Printf("Parsed network-config: %+v", networkConfig)
+		slog.Debug("parsed network-config", "config", networkConfig)
 
 		if err := network.GenerateSystemdNetworkConfig(networkConfig); err != nil {
-			log.Fatalf("Failed to generate systemd-networkd config: %v", err)
+			slog.Error("failed to generate systemd-networkd config", "error", err)
+			os.Exit(1)
 		}
 	} else {
-		log.Printf("No network-config found at %s, skipping network configuration", networkConfigPath)
+		slog.Info("no network-config found, skipping", "path", networkConfigPath)
 	}
 
 	if err := system.CheckAndGenerateSSHKeys(); err != nil {
-		log.Fatalf("Failed to check and generate SSH keys: %v", err)
+		slog.Error("failed to check/generate SSH keys", "error", err)
+		os.Exit(1)
 	}
 
-	log.Printf("Completed %s execution successfully", service.ServiceName)
+	slog.Info("completed successfully")
 }

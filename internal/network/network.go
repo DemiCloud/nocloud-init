@@ -2,7 +2,7 @@ package network
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -134,7 +134,7 @@ func updateResolvConfAt(path string, nameservers []string, searchDomain string) 
 	if err := os.Rename(tmpName, path); err != nil {
 		return fmt.Errorf("failed to rename %s to %s: %v", tmpName, path, err)
 	}
-	log.Printf("Updated %s with DNS configuration", path)
+	slog.Info("updated DNS configuration", "path", path)
 	return nil
 }
 
@@ -184,7 +184,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		}
 
 		if len(entry.Subnets) > 1 {
-			log.Printf("WARNING: interface %s has %d subnets; only the first will be configured", entry.Name, len(entry.Subnets))
+			slog.Warn("interface has multiple subnets; only the first will be configured", "interface", entry.Name, "count", len(entry.Subnets))
 		}
 		subnet := entry.Subnets[0]
 		useDHCP := subnet.Type == "dhcp4"
@@ -242,7 +242,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			linkFile.Close()
 			return fmt.Errorf("failed to close network config file for %s: %v", entry.Name, err)
 		}
-		log.Printf("Generated systemd-networkd config for interface %s at %s", entry.Name, networkFilePath)
+		slog.Info("generated network config", "interface", entry.Name, "path", networkFilePath)
 
 		if err := linkTmpl.Execute(linkFile, linkData); err != nil {
 			linkFile.Close()
@@ -251,7 +251,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if err := linkFile.Close(); err != nil {
 			return fmt.Errorf("failed to close link config file for %s: %v", entry.Name, err)
 		}
-		log.Printf("Generated systemd-networkd link config for interface %s at %s", entry.Name, linkFilePath)
+		slog.Info("generated link config", "interface", entry.Name, "path", linkFilePath)
 	}
 
 	if err := updateResolvConfAt(resolvPath, nameservers, searchDomain); err != nil {
@@ -300,7 +300,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 				return fmt.Errorf("interface %s: no addresses and dhcp4 not set", ifaceName)
 			}
 			if len(eth.Addresses) > 1 {
-				log.Printf("WARNING: interface %s has %d addresses; only the first will be configured", ifaceName, len(eth.Addresses))
+				slog.Warn("interface has multiple addresses; only the first will be configured", "interface", ifaceName, "count", len(eth.Addresses))
 			}
 			address, cidr, err = parseCIDRAddress(eth.Addresses[0])
 			if err != nil {
@@ -353,7 +353,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			linkFile.Close()
 			return fmt.Errorf("failed to close network config file for %s: %v", ifaceName, err)
 		}
-		log.Printf("Generated systemd-networkd config for interface %s at %s", ifaceName, networkFilePath)
+		slog.Info("generated network config", "interface", ifaceName, "path", networkFilePath)
 
 		if err := linkTmpl.Execute(linkFile, linkData); err != nil {
 			linkFile.Close()
@@ -362,7 +362,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if err := linkFile.Close(); err != nil {
 			return fmt.Errorf("failed to close link config file for %s: %v", ifaceName, err)
 		}
-		log.Printf("Generated systemd-networkd link config for interface %s at %s", ifaceName, linkFilePath)
+		slog.Info("generated link config", "interface", ifaceName, "path", linkFilePath)
 
 		nameservers = append(nameservers, eth.Nameservers.Addresses...)
 		searchDomains = append(searchDomains, eth.Nameservers.Search...)

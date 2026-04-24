@@ -3,7 +3,7 @@ package system
 import (
 	"bufio"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -130,18 +130,18 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 		return fmt.Errorf("failed to rename %s to %s: %v", tmpName, hostsPath, err)
 	}
 
-	log.Printf("Updated %s with hostname entry", hostsPath)
+	slog.Info("updated hosts file", "path", hostsPath)
 	return nil
 }
 
 func CheckAndGenerateSSHKeys() error {
 	if _, err := os.Stat(sshKeyPath); os.IsNotExist(err) {
-		log.Println("SSH host key not found, generating new keys...")
+		slog.Info("SSH host key not found, generating")
 		cmd := exec.Command("ssh-keygen", "-A")
 		if err := cmd.Run(); err != nil {
 			return fmt.Errorf("failed to generate SSH host keys: %v", err)
 		}
-		log.Println("Generated missing SSH host keys")
+		slog.Info("generated SSH host keys")
 	} else if err != nil {
 		return fmt.Errorf("failed to check SSH host key existence: %v", err)
 	}

@@ -2,7 +2,7 @@ package service
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"text/template"
@@ -90,14 +90,13 @@ func InstallService() error {
 		return fmt.Errorf("failed to execute systemd service template: %v", err)
 	}
 
-	log.Printf("Installed systemd service at %s", servicePath)
+	slog.Info("installed systemd service", "path", servicePath)
 
 	// Attempt DBus connection (optional)
 	conn, err := dbus.SystemBus()
 	if err != nil {
-		log.Printf("Warning: Could not connect to system bus (DBus unavailable?).")
-		log.Printf("You may need to enable the service manually:")
-		log.Printf("  systemctl enable %s.service", ServiceName)
+		slog.Warn("could not connect to system bus, enable service manually",
+			"command", "systemctl enable "+ServiceName+".service")
 		return nil
 	}
 	defer conn.Close()
@@ -107,13 +106,12 @@ func InstallService() error {
 		[]string{fmt.Sprintf("%s.service", ServiceName)}, false, true)
 
 	if call.Err != nil {
-		log.Printf("Warning: Could not enable the service automatically (DBus unavailable?).")
-		log.Printf("You may need to enable it manually:")
-		log.Printf("  systemctl enable %s.service", ServiceName)
+		slog.Warn("could not enable service automatically, enable manually",
+			"command", "systemctl enable "+ServiceName+".service")
 		return nil
 	}
 
-	log.Printf("Installed and Enabled %s", ServiceName)
+	slog.Info("installed and enabled service", "service", ServiceName)
 	return nil
 }
 
@@ -122,7 +120,7 @@ func CheckPrograms() error {
 		if _, err := exec.LookPath(program); err != nil {
 			return fmt.Errorf("required program %s is not installed", program)
 		}
-		log.Printf("Program %s is available", program)
+		slog.Debug("program available", "program", program)
 	}
 	return nil
 }
@@ -132,7 +130,7 @@ func CheckDirectories() error {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			return fmt.Errorf("required directory %s does not exist", dir)
 		}
-		log.Printf("Directory %s exists", dir)
+		slog.Debug("directory exists", "dir", dir)
 	}
 	return nil
 }
