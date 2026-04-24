@@ -30,11 +30,11 @@ A minimal cloud-init–compatible client implementing the NoCloud datasource. It
 - `/etc/hosts` updates for proper FQDN resolution (e.g., `hostname -f`)
 
 ### User management
-- Password update for a specified user
+- Password update for a specified user (field must contain a pre-hashed credential, e.g. `$6$...`; plaintext passwords are rejected)
 - SSH host key generation when missing (ideal for template cloning)
 
 ## Dependencies
-- `usermod` — for password updates
+- `chpasswd` — for password updates (reads `user:hash` from stdin; hash never exposed in process list)
 - `ssh-keygen` — for SSH host key generation
 
 ### Network configuration
