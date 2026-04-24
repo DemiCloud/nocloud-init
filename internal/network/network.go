@@ -405,6 +405,16 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 	}
 
 	if len(nameservers) > 0 {
+		// Deduplicate nameservers while preserving first-seen order.
+		seen := make(map[string]struct{}, len(nameservers))
+		deduped := make([]string, 0, len(nameservers))
+		for _, ns := range nameservers {
+			if _, ok := seen[ns]; !ok {
+				seen[ns] = struct{}{}
+				deduped = append(deduped, ns)
+			}
+		}
+		nameservers = deduped
 		if err := updateResolvConfAt(resolvPath, nameservers, strings.Join(searchDomains, " ")); err != nil {
 			return fmt.Errorf("failed to update resolv.conf: %v", err)
 		}

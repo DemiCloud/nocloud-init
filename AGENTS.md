@@ -25,7 +25,7 @@ Supported actions:
 - Update `/etc/resolv.conf` (skipped if it is a symlink, e.g. to systemd-resolved)
 - Set hostname via `/etc/hostname` + `sethostname(2)`
 - Update `/etc/hosts` loopback entry for FQDN resolution
-- Update a user password via `usermod -p`
+- Update a user password via `chpasswd -e` (expects a pre-hashed credential, e.g. `$6$...`)
 - Generate SSH host keys via `ssh-keygen` when missing
 
 ---

@@ -13,7 +13,7 @@ import (
 	"github.com/demicloud/nocloud-init/internal/types"
 )
 
-const sshKeyPath = "/etc/ssh/ssh_host_rsa_key"
+
 
 func IsValidHostname(s string) bool {
 	if len(s) == 0 || len(s) > 253 {
@@ -138,15 +138,14 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 }
 
 func CheckAndGenerateSSHKeys() error {
-	if _, err := os.Stat(sshKeyPath); os.IsNotExist(err) {
-		slog.Info("SSH host key not found, generating")
-		cmd := exec.Command("ssh-keygen", "-A")
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to generate SSH host keys: %v", err)
-		}
-		slog.Info("generated SSH host keys")
-	} else if err != nil {
-		return fmt.Errorf("failed to check SSH host key existence: %v", err)
+	// ssh-keygen -A generates any missing host key types and skips those that
+	// already exist, making it safe to run unconditionally. Checking only one
+	// key type (e.g. RSA) as a sentinel would miss newly-supported types
+	// (e.g. Ed25519) that could be absent after an upgrade.
+	cmd := exec.Command("ssh-keygen", "-A")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to generate SSH host keys: %v", err)
 	}
+	slog.Info("ensured SSH host keys are present")
 	return nil
 }
