@@ -111,6 +111,18 @@ func TestUpdateHostsFile(t *testing.T) {
 			wantContains: []string{"127.0.1.1 myhost"},
 			wantAbsent:   []string{"127.0.1.1  myhost"},
 		},
+		{
+			name: "no-op when manage_etc_hosts is true but hostname is empty",
+			initialHosts: `127.0.0.1 localhost
+`,
+			userData: types.UserData{
+				ManageEtcHosts: true,
+				Hostname:       "",
+				FQDN:           "",
+			},
+			wantContains: []string{"127.0.0.1 localhost"},
+			wantAbsent:   []string{"127.0.1.1"},
+		},
 	}
 
 	for _, tt := range tests {
