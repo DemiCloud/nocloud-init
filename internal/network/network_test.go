@@ -292,6 +292,76 @@ func TestGenerateSystemdNetworkConfig_V1MultiNIC(t *testing.T) {
 	assertFileContains(t, resolvPath, "search example.com")
 }
 
+func TestGenerateSystemdNetworkConfig_V1InvalidMAC(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "not-a-mac",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid MAC address, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid MAC address") {
+		t.Errorf("error %q should mention invalid MAC address", err.Error())
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V2InvalidMAC(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "gg:hh:ii:jj:kk:ll"},
+				SetName: "eth0",
+				DHCP4:   true,
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid MAC address, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid MAC address") {
+		t.Errorf("error %q should mention invalid MAC address", err.Error())
+	}
+}
+
+func TestIsValidMACAddress(t *testing.T) {
+	valid := []string{
+		"52:54:00:ab:cd:ef",
+		"AA:BB:CC:DD:EE:FF",
+		"01-23-45-67-89-ab",
+		"0123.4567.89ab",
+	}
+	for _, mac := range valid {
+		if !isValidMACAddress(mac) {
+			t.Errorf("isValidMACAddress(%q) = false, want true", mac)
+		}
+	}
+
+	invalid := []string{
+		"not-a-mac",
+		"gg:hh:ii:jj:kk:ll",
+		"52:54:00:ab:cd",
+		"52:54:00:ab:cd:ef:00:extra",
+		"",
+	}
+	for _, mac := range invalid {
+		if isValidMACAddress(mac) {
+			t.Errorf("isValidMACAddress(%q) = true, want false", mac)
+		}
+	}
+}
+
 func TestIsValidInterfaceName(t *testing.T) {
 	valid := []string{"eth0", "enp3s0", "eth0:1", "eth_0", "eth-0", "lo", "wlan0"}
 	for _, name := range valid {
