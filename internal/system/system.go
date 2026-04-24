@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -63,26 +64,22 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 
 	loopbackEntry := fmt.Sprintf("127.0.1.1 %s %s", userData.FQDN, userData.Hostname)
 
-	file, err := os.OpenFile(hostsPath, os.O_RDWR, 0o644)
+	file, err := os.Open(hostsPath)
 	if err != nil {
 		return fmt.Errorf("failed to open %s: %v", hostsPath, err)
 	}
-	defer file.Close()
 
 	var lines []string
 	scanner := bufio.NewScanner(file)
-
 	for scanner.Scan() {
 		line := scanner.Text()
-
 		// Drop ALL existing 127.0.1.1 entries
 		if strings.HasPrefix(line, "127.0.1.1") {
 			continue
 		}
-
 		lines = append(lines, line)
 	}
-
+	file.Close()
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading %s: %v", hostsPath, err)
 	}
@@ -90,19 +87,34 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 	// Prepend the correct entry
 	lines = append([]string{loopbackEntry}, lines...)
 
-	if err := file.Truncate(0); err != nil {
-		return fmt.Errorf("failed to truncate %s: %v", hostsPath, err)
+	// Write to a temp file in the same directory so the rename is atomic
+	// (same filesystem guaranteed).
+	tmp, err := os.CreateTemp(filepath.Dir(hostsPath), ".hosts.*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for %s: %v", hostsPath, err)
 	}
-	if _, err := file.Seek(0, 0); err != nil {
-		return fmt.Errorf("failed to seek %s: %v", hostsPath, err)
-	}
+	tmpName := tmp.Name()
+	// Clean up the temp file on any failure path; after a successful rename
+	// the path no longer exists so os.Remove is a harmless no-op.
+	defer os.Remove(tmpName) //nolint:errcheck
 
-	writer := bufio.NewWriter(file)
+	writer := bufio.NewWriter(tmp)
 	for _, line := range lines {
 		fmt.Fprintln(writer, line)
 	}
 	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("failed to flush %s: %v", hostsPath, err)
+		tmp.Close()
+		return fmt.Errorf("failed to write temp hosts file: %v", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to sync temp hosts file: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp hosts file: %v", err)
+	}
+	if err := os.Rename(tmpName, hostsPath); err != nil {
+		return fmt.Errorf("failed to rename %s to %s: %v", tmpName, hostsPath, err)
 	}
 
 	log.Printf("Updated %s with hostname entry", hostsPath)
