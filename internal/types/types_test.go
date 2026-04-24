@@ -467,6 +467,35 @@ config:
 			t.Fatal("expected error for unknown field in strict mode, got nil")
 		}
 	})
+
+	// JSON strict tests — previously json.Unmarshal was used unconditionally,
+	// so unknown fields were always accepted regardless of the strict flag.
+	t.Run("user-data strict rejects unknown JSON fields", func(t *testing.T) {
+		input := `{"hostname":"myhost","unknown_field":"surprise"}`
+		var ud UserData
+		if err := UnmarshalUserData([]byte(input), &ud, true); err == nil {
+			t.Fatal("expected error for unknown JSON field in strict mode, got nil")
+		}
+	})
+
+	t.Run("user-data non-strict accepts unknown JSON fields", func(t *testing.T) {
+		input := `{"hostname":"myhost","unknown_field":"surprise"}`
+		var ud UserData
+		if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+			t.Fatalf("unexpected error in non-strict mode: %v", err)
+		}
+		if ud.Hostname != "myhost" {
+			t.Errorf("Hostname = %q, want %q", ud.Hostname, "myhost")
+		}
+	})
+
+	t.Run("network-config strict rejects unknown JSON fields", func(t *testing.T) {
+		input := `{"version":1,"config":[],"unknown_field":"surprise"}`
+		var nc NetworkConfig
+		if err := UnmarshalNetworkConfig([]byte(input), &nc, true); err == nil {
+			t.Fatal("expected error for unknown JSON field in strict mode, got nil")
+		}
+	})
 }
 
 // TestUnmarshalNetworkConfig_EmptyInput verifies that an empty byte slice

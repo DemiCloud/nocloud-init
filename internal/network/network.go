@@ -178,6 +178,9 @@ func parseCIDRAddress(addr string) (string, int, error) {
 	if len(parts) != 2 {
 		return "", 0, fmt.Errorf("invalid address format: %s", addr)
 	}
+	if net.ParseIP(parts[0]) == nil {
+		return "", 0, fmt.Errorf("invalid address format: %s", addr)
+	}
 	cidr, err := netmaskToCIDR(parts[1])
 	if err != nil {
 		return "", 0, fmt.Errorf("invalid address format: %s", addr)

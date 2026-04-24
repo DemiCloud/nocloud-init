@@ -69,6 +69,14 @@ type NetworkConfigV2Ethernet struct {
 	} `yaml:"nameservers" json:"nameservers"`
 }
 
+func unmarshalJSON(data []byte, v interface{}, strict bool) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if strict {
+		dec.DisallowUnknownFields()
+	}
+	return dec.Decode(v)
+}
+
 func unmarshalYAML(data []byte, v interface{}, strict bool) error {
 	if strict {
 		dec := yaml.NewDecoder(bytes.NewReader(data))
@@ -87,7 +95,7 @@ func UnmarshalUserData(data []byte, ud *UserData, strict bool) error {
 	if yamlErr == nil {
 		return nil
 	}
-	if err := json.Unmarshal(data, ud); err == nil {
+	if err := unmarshalJSON(data, ud, strict); err == nil {
 		return nil
 	} else {
 		return fmt.Errorf("yaml: %v; json: %v", yamlErr, err)
@@ -99,7 +107,7 @@ func UnmarshalNetworkConfig(data []byte, nc *NetworkConfig, strict bool) error {
 	if yamlErr == nil {
 		return nil
 	}
-	if err := json.Unmarshal(data, nc); err == nil {
+	if err := unmarshalJSON(data, nc, strict); err == nil {
 		return nil
 	} else {
 		return fmt.Errorf("yaml: %v; json: %v", yamlErr, err)
