@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -106,14 +107,32 @@ func updateResolvConfAt(path string, nameservers []string, searchDomain string) 
 		SearchDomain: searchDomain,
 	}
 
-	resolvFile, err := os.Create(path)
+	// Write to a temp file in the same directory as the target so that the
+	// subsequent rename is guaranteed to be on the same filesystem — and
+	// therefore atomic.  This prevents a window where readers see a truncated
+	// file.
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".resolv.conf.*")
 	if err != nil {
-		return fmt.Errorf("failed to create %s: %v", path, err)
+		return fmt.Errorf("failed to create temp file for %s: %v", path, err)
 	}
-	defer resolvFile.Close()
+	tmpName := tmp.Name()
+	// On any failure path the temp file is removed; after a successful rename
+	// the path no longer exists so os.Remove is a harmless no-op.
+	defer os.Remove(tmpName) //nolint:errcheck
 
-	if err := resolvTmpl.Execute(resolvFile, resolvData); err != nil {
+	if err := resolvTmpl.Execute(tmp, resolvData); err != nil {
+		tmp.Close()
 		return fmt.Errorf("failed to execute resolv.conf template: %v", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("failed to sync temp resolv.conf: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp resolv.conf: %v", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("failed to rename %s to %s: %v", tmpName, path, err)
 	}
 	log.Printf("Updated %s with DNS configuration", path)
 	return nil
