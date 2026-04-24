@@ -2,6 +2,7 @@ package types
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -372,6 +373,40 @@ func TestUnmarshalNetworkConfig_MultiNIC(t *testing.T) {
 	}
 	if len(ns.Search) == 0 || ns.Search[0] != "example.com" {
 		t.Errorf("nameserver search = %v, want [example.com]", ns.Search)
+	}
+}
+
+// TestUnmarshalUserData_ErrorContainsBothFormats verifies that when input is
+// neither valid YAML nor valid JSON, the error message includes both errors.
+func TestUnmarshalUserData_ErrorContainsBothFormats(t *testing.T) {
+	var ud UserData
+	err := UnmarshalUserData([]byte("}{:::not yaml or json:::"), &ud)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "yaml:") {
+		t.Errorf("error %q does not contain \"yaml:\"", msg)
+	}
+	if !strings.Contains(msg, "json:") {
+		t.Errorf("error %q does not contain \"json:\"", msg)
+	}
+}
+
+// TestUnmarshalNetworkConfig_ErrorContainsBothFormats verifies that when input
+// is neither valid YAML nor valid JSON, the error message includes both errors.
+func TestUnmarshalNetworkConfig_ErrorContainsBothFormats(t *testing.T) {
+	var nc NetworkConfig
+	err := UnmarshalNetworkConfig([]byte("}{:::not yaml or json:::"), &nc)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "yaml:") {
+		t.Errorf("error %q does not contain \"yaml:\"", msg)
+	}
+	if !strings.Contains(msg, "json:") {
+		t.Errorf("error %q does not contain \"json:\"", msg)
 	}
 }
 
