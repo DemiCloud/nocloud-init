@@ -47,9 +47,9 @@ MACAddress={{.MacAddress}}
 Name={{.Name}}
 `
 
-const resolvConfTemplate = `search {{.SearchDomain}}
-{{range .Nameservers}}nameserver {{.}}
-{{end}}options edns0 trust-ad
+const resolvConfTemplate = `{{- if .SearchDomain}}search {{.SearchDomain}}
+{{end -}}{{range .Nameservers}}nameserver {{.}}
+{{end}}options edns0
 `
 
 func netmaskToCIDR(netmask string) (int, error) {
@@ -240,6 +240,11 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			linkFile.Close()
 			return fmt.Errorf("failed to execute network template for %s: %v", entry.Name, err)
 		}
+		if err := networkFile.Sync(); err != nil {
+			networkFile.Close()
+			linkFile.Close()
+			return fmt.Errorf("failed to sync network config file for %s: %v", entry.Name, err)
+		}
 		if err := networkFile.Close(); err != nil {
 			linkFile.Close()
 			return fmt.Errorf("failed to close network config file for %s: %v", entry.Name, err)
@@ -249,6 +254,10 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if err := linkTmpl.Execute(linkFile, linkData); err != nil {
 			linkFile.Close()
 			return fmt.Errorf("failed to execute link template for %s: %v", entry.Name, err)
+		}
+		if err := linkFile.Sync(); err != nil {
+			linkFile.Close()
+			return fmt.Errorf("failed to sync link config file for %s: %v", entry.Name, err)
 		}
 		if err := linkFile.Close(); err != nil {
 			return fmt.Errorf("failed to close link config file for %s: %v", entry.Name, err)
@@ -353,6 +362,11 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			linkFile.Close()
 			return fmt.Errorf("failed to execute network template for %s: %v", ifaceName, err)
 		}
+		if err := networkFile.Sync(); err != nil {
+			networkFile.Close()
+			linkFile.Close()
+			return fmt.Errorf("failed to sync network config file for %s: %v", ifaceName, err)
+		}
 		if err := networkFile.Close(); err != nil {
 			linkFile.Close()
 			return fmt.Errorf("failed to close network config file for %s: %v", ifaceName, err)
@@ -362,6 +376,10 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if err := linkTmpl.Execute(linkFile, linkData); err != nil {
 			linkFile.Close()
 			return fmt.Errorf("failed to execute link template for %s: %v", ifaceName, err)
+		}
+		if err := linkFile.Sync(); err != nil {
+			linkFile.Close()
+			return fmt.Errorf("failed to sync link config file for %s: %v", ifaceName, err)
 		}
 		if err := linkFile.Close(); err != nil {
 			return fmt.Errorf("failed to close link config file for %s: %v", ifaceName, err)

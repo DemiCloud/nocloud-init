@@ -395,6 +395,7 @@ func TestUpdateResolvConfAt_AtomicWrite(t *testing.T) {
 	assertFileContains(t, path, "nameserver 1.1.1.1")
 	assertFileContains(t, path, "nameserver 8.8.8.8")
 	assertFileContains(t, path, "search example.com")
+	assertFileNotContains(t, path, "trust-ad")
 
 	// No temp files must be left behind in the directory.
 	entries, err := os.ReadDir(dir)
@@ -406,6 +407,20 @@ func TestUpdateResolvConfAt_AtomicWrite(t *testing.T) {
 			t.Errorf("unexpected leftover file in dir: %s", e.Name())
 		}
 	}
+}
+
+func TestUpdateResolvConfAt_EmptySearchDomain(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "resolv.conf")
+
+	if err := updateResolvConfAt(path, []string{"1.1.1.1"}, ""); err != nil {
+		t.Fatalf("updateResolvConfAt() error = %v", err)
+	}
+
+	// No search line should appear when search domain is empty.
+	assertFileNotContains(t, path, "search")
+	assertFileContains(t, path, "nameserver 1.1.1.1")
+	assertFileContains(t, path, "options edns0")
 }
 
 func TestUpdateResolvConfAt_SymlinkRejected(t *testing.T) {
