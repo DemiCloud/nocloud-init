@@ -72,8 +72,9 @@ func UnmarshalUserData(data []byte, ud *UserData) error {
 	}
 	if err := json.Unmarshal(data, ud); err == nil {
 		return nil
+	} else {
+		return fmt.Errorf("yaml: %v; json: %v", yamlErr, err)
 	}
-	return fmt.Errorf("yaml: %v", yamlErr)
 }
 
 func UnmarshalNetworkConfig(data []byte, nc *NetworkConfig) error {
@@ -83,6 +84,7 @@ func UnmarshalNetworkConfig(data []byte, nc *NetworkConfig) error {
 	}
 	if err := json.Unmarshal(data, nc); err == nil {
 		return nil
+	} else {
+		return fmt.Errorf("yaml: %v; json: %v", yamlErr, err)
 	}
-	return fmt.Errorf("yaml: %v", yamlErr)
 }
