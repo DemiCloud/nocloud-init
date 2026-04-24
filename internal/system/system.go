@@ -70,7 +70,12 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 		return nil
 	}
 
-	loopbackEntry := fmt.Sprintf("127.0.1.1 %s %s", userData.FQDN, userData.Hostname)
+	var loopbackEntry string
+	if userData.FQDN != "" {
+		loopbackEntry = fmt.Sprintf("127.0.1.1 %s %s", userData.FQDN, userData.Hostname)
+	} else {
+		loopbackEntry = fmt.Sprintf("127.0.1.1 %s", userData.Hostname)
+	}
 
 	file, err := os.Open(hostsPath)
 	if err != nil {
