@@ -62,6 +62,10 @@ func TestParseCIDRAddress(t *testing.T) {
 	{"999.999.999.999/24", "", 0, true},
 	// Valid IP with non-CIDR, non-dotted-netmask suffix.
 	{"192.0.2.10/not-a-mask", "", 0, true},
+	// Newline in the IP part of the netmask-notation fallback path must be
+	// rejected; previously parseCIDRAddress returned the raw string verbatim,
+	// allowing newline injection into generated .network files.
+	{"\nevil/255.255.255.0", "", 0, true},
 	}
 
 	for _, tt := range tests {
