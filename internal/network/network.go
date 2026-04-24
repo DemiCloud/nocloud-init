@@ -35,7 +35,11 @@ const systemdNetworkDir = "/etc/systemd/network"
 const resolvConfPath = "/etc/resolv.conf"
 
 const networkConfigTemplate = `[Match]
+{{- if .MacAddress}}
 MACAddress={{.MacAddress}}
+{{- else}}
+Name={{.Name}}
+{{- end}}
 
 [Network]
 {{- if .DHCP }}
@@ -174,11 +178,11 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 	}
 
 	var nameservers []string
-	var searchDomain string
+	var searchDomains []string
 	for _, entry := range config.Config {
 		if entry.Type == "nameserver" {
 			nameservers = append(nameservers, entry.Address...)
-			searchDomain = strings.Join(entry.Search, " ")
+			searchDomains = append(searchDomains, entry.Search...)
 		}
 	}
 
@@ -216,13 +220,6 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			return fmt.Errorf("failed to create network config file for %s: %v", entry.Name, err)
 		}
 
-		linkFilePath := filepath.Join(networkDir, "10-cloud-init-"+entry.Name+".link")
-		linkFile, err := os.Create(linkFilePath)
-		if err != nil {
-			networkFile.Close()
-			return fmt.Errorf("failed to create link config file for %s: %v", entry.Name, err)
-		}
-
 		networkData := struct {
 			Address    string
 			CIDR       int
@@ -238,46 +235,63 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Gateway:    subnet.Gateway,
 			DHCP:       useDHCP,
 		}
-		linkData := struct {
-			MacAddress string
-			Name       string
-		}{
-			MacAddress: entry.MacAddress,
-			Name:       entry.Name,
-		}
 
 		if err := networkTmpl.Execute(networkFile, networkData); err != nil {
 			networkFile.Close()
-			linkFile.Close()
 			return fmt.Errorf("failed to execute network template for %s: %v", entry.Name, err)
 		}
 		if err := networkFile.Sync(); err != nil {
 			networkFile.Close()
-			linkFile.Close()
 			return fmt.Errorf("failed to sync network config file for %s: %v", entry.Name, err)
 		}
 		if err := networkFile.Close(); err != nil {
-			linkFile.Close()
 			return fmt.Errorf("failed to close network config file for %s: %v", entry.Name, err)
 		}
 		slog.Info("generated network config", "interface", entry.Name, "path", networkFilePath)
 
-		if err := linkTmpl.Execute(linkFile, linkData); err != nil {
-			linkFile.Close()
-			return fmt.Errorf("failed to execute link template for %s: %v", entry.Name, err)
+		if entry.MacAddress != "" {
+			linkFilePath := filepath.Join(networkDir, "10-cloud-init-"+entry.Name+".link")
+			linkFile, err := os.Create(linkFilePath)
+			if err != nil {
+				return fmt.Errorf("failed to create link config file for %s: %v", entry.Name, err)
+			}
+
+			linkData := struct {
+				MacAddress string
+				Name       string
+			}{
+				MacAddress: entry.MacAddress,
+				Name:       entry.Name,
+			}
+
+			if err := linkTmpl.Execute(linkFile, linkData); err != nil {
+				linkFile.Close()
+				return fmt.Errorf("failed to execute link template for %s: %v", entry.Name, err)
+			}
+			if err := linkFile.Sync(); err != nil {
+				linkFile.Close()
+				return fmt.Errorf("failed to sync link config file for %s: %v", entry.Name, err)
+			}
+			if err := linkFile.Close(); err != nil {
+				return fmt.Errorf("failed to close link config file for %s: %v", entry.Name, err)
+			}
+			slog.Info("generated link config", "interface", entry.Name, "path", linkFilePath)
+		} else {
+			slog.Warn("interface has no MAC address; skipping link file", "interface", entry.Name)
 		}
-		if err := linkFile.Sync(); err != nil {
-			linkFile.Close()
-			return fmt.Errorf("failed to sync link config file for %s: %v", entry.Name, err)
-		}
-		if err := linkFile.Close(); err != nil {
-			return fmt.Errorf("failed to close link config file for %s: %v", entry.Name, err)
-		}
-		slog.Info("generated link config", "interface", entry.Name, "path", linkFilePath)
 	}
 
 	if len(nameservers) > 0 {
-		if err := updateResolvConfAt(resolvPath, nameservers, searchDomain); err != nil {
+		// Deduplicate nameservers while preserving first-seen order.
+		seen := make(map[string]struct{}, len(nameservers))
+		deduped := make([]string, 0, len(nameservers))
+		for _, ns := range nameservers {
+			if _, ok := seen[ns]; !ok {
+				seen[ns] = struct{}{}
+				deduped = append(deduped, ns)
+			}
+		}
+		if err := updateResolvConfAt(resolvPath, deduped, strings.Join(searchDomains, " ")); err != nil {
 			return fmt.Errorf("failed to update resolv.conf: %v", err)
 		}
 	}
@@ -341,13 +355,6 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			return fmt.Errorf("failed to create network config file for %s: %v", ifaceName, err)
 		}
 
-		linkFilePath := filepath.Join(networkDir, "10-cloud-init-"+ifaceName+".link")
-		linkFile, err := os.Create(linkFilePath)
-		if err != nil {
-			networkFile.Close()
-			return fmt.Errorf("failed to create link config file for %s: %v", ifaceName, err)
-		}
-
 		networkData := struct {
 			Address    string
 			CIDR       int
@@ -363,42 +370,50 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Gateway:    eth.Gateway4,
 			DHCP:       eth.DHCP4,
 		}
-		linkData := struct {
-			MacAddress string
-			Name       string
-		}{
-			MacAddress: eth.Match.MACAddress,
-			Name:       ifaceName,
-		}
 
 		if err := networkTmpl.Execute(networkFile, networkData); err != nil {
 			networkFile.Close()
-			linkFile.Close()
 			return fmt.Errorf("failed to execute network template for %s: %v", ifaceName, err)
 		}
 		if err := networkFile.Sync(); err != nil {
 			networkFile.Close()
-			linkFile.Close()
 			return fmt.Errorf("failed to sync network config file for %s: %v", ifaceName, err)
 		}
 		if err := networkFile.Close(); err != nil {
-			linkFile.Close()
 			return fmt.Errorf("failed to close network config file for %s: %v", ifaceName, err)
 		}
 		slog.Info("generated network config", "interface", ifaceName, "path", networkFilePath)
 
-		if err := linkTmpl.Execute(linkFile, linkData); err != nil {
-			linkFile.Close()
-			return fmt.Errorf("failed to execute link template for %s: %v", ifaceName, err)
+		if eth.Match.MACAddress != "" {
+			linkFilePath := filepath.Join(networkDir, "10-cloud-init-"+ifaceName+".link")
+			linkFile, err := os.Create(linkFilePath)
+			if err != nil {
+				return fmt.Errorf("failed to create link config file for %s: %v", ifaceName, err)
+			}
+
+			linkData := struct {
+				MacAddress string
+				Name       string
+			}{
+				MacAddress: eth.Match.MACAddress,
+				Name:       ifaceName,
+			}
+
+			if err := linkTmpl.Execute(linkFile, linkData); err != nil {
+				linkFile.Close()
+				return fmt.Errorf("failed to execute link template for %s: %v", ifaceName, err)
+			}
+			if err := linkFile.Sync(); err != nil {
+				linkFile.Close()
+				return fmt.Errorf("failed to sync link config file for %s: %v", ifaceName, err)
+			}
+			if err := linkFile.Close(); err != nil {
+				return fmt.Errorf("failed to close link config file for %s: %v", ifaceName, err)
+			}
+			slog.Info("generated link config", "interface", ifaceName, "path", linkFilePath)
+		} else {
+			slog.Warn("interface has no MAC address; skipping link file", "interface", ifaceName)
 		}
-		if err := linkFile.Sync(); err != nil {
-			linkFile.Close()
-			return fmt.Errorf("failed to sync link config file for %s: %v", ifaceName, err)
-		}
-		if err := linkFile.Close(); err != nil {
-			return fmt.Errorf("failed to close link config file for %s: %v", ifaceName, err)
-		}
-		slog.Info("generated link config", "interface", ifaceName, "path", linkFilePath)
 
 		nameservers = append(nameservers, eth.Nameservers.Addresses...)
 		searchDomains = append(searchDomains, eth.Nameservers.Search...)

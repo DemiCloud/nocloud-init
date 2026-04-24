@@ -331,6 +331,9 @@ func TestGenerateSystemdNetworkConfig_V1MultipleNameserverEntries(t *testing.T) 
 	// Both nameservers must appear — the second entry must not overwrite the first.
 	assertFileContains(t, resolvPath, "nameserver 192.0.2.1")
 	assertFileContains(t, resolvPath, "nameserver 192.0.2.2")
+	// Search domain from the first nameserver entry must not be lost when a
+	// second nameserver entry has no search domain.
+	assertFileContains(t, resolvPath, "search example.com")
 }
 
 func TestGenerateSystemdNetworkConfig_V1InvalidMAC(t *testing.T) {
@@ -601,6 +604,71 @@ func TestGenerateSystemdNetworkConfig_V2DuplicateNameservers(t *testing.T) {
 	count := strings.Count(got, "nameserver 192.0.2.1")
 	if count != 1 {
 		t.Errorf("expected exactly 1 occurrence of 'nameserver 192.0.2.1', got %d\n%s", count, got)
+	}
+}
+
+// TestGenerateSystemdNetworkConfig_V1NoMAC verifies that when a v1 physical
+// interface has no mac_address, the .network file matches by Name= and no
+// .link file is created.
+func TestGenerateSystemdNetworkConfig_V1NoMAC(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:    "physical",
+				Name:    "eth0",
+				Subnets: []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "Name=eth0")
+	assertFileNotContains(t, networkFile, "MACAddress=")
+
+	// No .link file must be created when there is no MAC to match on.
+	linkFile := filepath.Join(dir, "10-cloud-init-eth0.link")
+	if _, err := os.Stat(linkFile); !os.IsNotExist(err) {
+		t.Errorf(".link file should not be created when MAC address is absent")
+	}
+}
+
+// TestGenerateSystemdNetworkConfig_V2NoMAC verifies that when a v2 ethernet
+// entry has no match.macaddress, the .network file matches by Name= and no
+// .link file is created.
+func TestGenerateSystemdNetworkConfig_V2NoMAC(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				SetName: "eth0",
+				DHCP4:   true,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "Name=eth0")
+	assertFileNotContains(t, networkFile, "MACAddress=")
+
+	// No .link file must be created when there is no MAC to match on.
+	linkFile := filepath.Join(dir, "10-cloud-init-eth0.link")
+	if _, err := os.Stat(linkFile); !os.IsNotExist(err) {
+		t.Errorf(".link file should not be created when MAC address is absent")
 	}
 }
 
