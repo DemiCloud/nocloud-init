@@ -19,9 +19,17 @@ func IsValidHostname(s string) bool {
 	if len(s) == 0 || len(s) > 253 {
 		return false
 	}
-	for _, c := range s {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '.') {
+	for _, label := range strings.Split(s, ".") {
+		if len(label) == 0 || len(label) > 63 {
 			return false
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-') {
+				return false
+			}
 		}
 	}
 	return true

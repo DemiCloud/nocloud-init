@@ -27,8 +27,21 @@ func TestIsValidHostname(t *testing.T) {
 		{"host name", false},
 		{"host!", false},
 		{"host@example.com", false},
-		{strings.Repeat("a", 253), true},
+		{strings.Repeat("a", 253), false}, // single label of 253 chars exceeds 63-char label limit
 		{strings.Repeat("a", 254), false},
+		// total length boundary: 63+1+63+1+63+1+61 = 253 (valid), +1 label char = 254 (invalid)
+		{strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61), true},
+		{strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 62), false},
+		// label starts/ends with hyphen (RFC 952)
+		{"-host", false},
+		{"host-", false},
+		{"my.-host.com", false},
+		{"my.host-.com", false},
+		// label too long (RFC 1035 §2.3.4)
+		{strings.Repeat("a", 63) + ".com", true},
+		{strings.Repeat("a", 64) + ".com", false},
+		// empty label (double dot)
+		{"host..example.com", false},
 	}
 
 	for _, tt := range tests {
