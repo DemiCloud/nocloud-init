@@ -75,6 +75,18 @@ manage_etc_hosts: true
 			input: "",
 			want:  UserData{},
 		},
+		{
+			// Verify that chpasswd.expire parses as true (the false / default is
+			// exercised indirectly by several other cases).
+			name:  "yaml chpasswd expire true",
+			input: "hostname: myhost\nchpasswd:\n  expire: true\n",
+			want: UserData{
+				Hostname: "myhost",
+				Chpasswd: struct {
+					Expire bool `yaml:"expire" json:"expire"`
+				}{Expire: true},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -442,6 +454,38 @@ func TestUnmarshalStrict(t *testing.T) {
 			t.Errorf("Version = %d, want 1", nc.Version)
 		}
 	})
+
+	t.Run("network-config strict rejects unknown YAML fields", func(t *testing.T) {
+		input := `version: 1
+config:
+  - type: physical
+    name: eth0
+    extra_unknown_key: surprise
+`
+		var nc NetworkConfig
+		if err := UnmarshalNetworkConfig([]byte(input), &nc, true); err == nil {
+			t.Fatal("expected error for unknown field in strict mode, got nil")
+		}
+	})
+}
+
+// TestUnmarshalNetworkConfig_EmptyInput verifies that an empty byte slice
+// yields a zero-value NetworkConfig without an error, mirroring the behaviour
+// of UnmarshalUserData for the same input.
+func TestUnmarshalNetworkConfig_EmptyInput(t *testing.T) {
+	var nc NetworkConfig
+	if err := UnmarshalNetworkConfig([]byte(""), &nc, false); err != nil {
+		t.Fatalf("UnmarshalNetworkConfig() unexpected error: %v", err)
+	}
+	if nc.Version != 0 {
+		t.Errorf("Version = %d, want 0", nc.Version)
+	}
+	if len(nc.Config) != 0 {
+		t.Errorf("len(Config) = %d, want 0", len(nc.Config))
+	}
+	if len(nc.Ethernets) != 0 {
+		t.Errorf("len(Ethernets) = %d, want 0", len(nc.Ethernets))
+	}
 }
 
 func mustReadFile(t *testing.T, path string) string {	t.Helper()

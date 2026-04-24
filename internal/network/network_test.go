@@ -58,6 +58,10 @@ func TestParseCIDRAddress(t *testing.T) {
 		// invalid
 		{"not-an-address", "", 0, true},
 		{"192.0.2.10", "", 0, true},
+	// Invalid IP with valid CIDR prefix length.
+	{"999.999.999.999/24", "", 0, true},
+	// Valid IP with non-CIDR, non-dotted-netmask suffix.
+	{"192.0.2.10/not-a-mask", "", 0, true},
 	}
 
 	for _, tt := range tests {
@@ -151,6 +155,46 @@ func TestGenerateSystemdNetworkConfig_V1DHCP(t *testing.T) {
 	if _, err := os.Stat(resolvPath); !os.IsNotExist(err) {
 		t.Errorf("resolv.conf should not be created when no nameservers are present")
 	}
+}
+
+// TestGenerateSystemdNetworkConfig_V1SkipPhysicalWithNoSubnets verifies that a
+// physical entry with an empty subnets list is silently skipped and no files
+// are written for it, while subsequent entries are still processed.
+func TestGenerateSystemdNetworkConfig_V1SkipPhysicalWithNoSubnets(t *testing.T) {
+	dir := t.TempDir()
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				// No subnets — must be silently skipped.
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+			},
+			{
+				Type:       "physical",
+				Name:       "eth1",
+				MacAddress: "bb:cc:dd:ee:ff:00",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp4"}},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() unexpected error: %v", err)
+	}
+
+	// eth0 has no subnets and must produce no files.
+	if _, err := os.Stat(filepath.Join(dir, "10-cloud-init-eth0.network")); !os.IsNotExist(err) {
+		t.Errorf("eth0.network should not be created for an entry with no subnets")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "10-cloud-init-eth0.link")); !os.IsNotExist(err) {
+		t.Errorf("eth0.link should not be created for an entry with no subnets")
+	}
+
+	// eth1 must still be configured.
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-eth1.network"), "DHCP=yes")
 }
 
 func TestGenerateSystemdNetworkConfig_V2Static(t *testing.T) {
@@ -742,6 +786,88 @@ func TestGenerateSystemdNetworkConfig_V2InvalidGateway4(t *testing.T) {
 	}
 }
 
+// TestGenerateSystemdNetworkConfig_V2StaticNoAddresses verifies that a v2
+// static interface with no addresses and DHCP4 unset returns an error.
+func TestGenerateSystemdNetworkConfig_V2StaticNoAddresses(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				// DHCP4 = false (default), Addresses = nil — must be rejected.
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for static interface with no addresses, got nil")
+	}
+	if !strings.Contains(err.Error(), "no addresses") {
+		t.Errorf("error %q should mention \"no addresses\"", err.Error())
+	}
+}
+
+// TestGenerateSystemdNetworkConfig_V2InvalidNameserverAddress verifies that an
+// invalid nameserver IP address inside a v2 ethernet entry is rejected.
+func TestGenerateSystemdNetworkConfig_V2InvalidNameserverAddress(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP4:   true,
+				Nameservers: struct {
+					Addresses []string `yaml:"addresses" json:"addresses"`
+					Search    []string `yaml:"search" json:"search"`
+				}{
+					Addresses: []string{"not-an-ip"},
+				},
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid v2 nameserver address, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid nameserver address") {
+		t.Errorf("error %q should mention invalid nameserver address", err.Error())
+	}
+}
+
+// TestGenerateSystemdNetworkConfig_V2InvalidSearchDomain verifies that an
+// invalid search domain inside a v2 ethernet nameservers block is rejected.
+func TestGenerateSystemdNetworkConfig_V2InvalidSearchDomain(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP4:   true,
+				Nameservers: struct {
+					Addresses []string `yaml:"addresses" json:"addresses"`
+					Search    []string `yaml:"search" json:"search"`
+				}{
+					Addresses: []string{"192.0.2.1"},
+					Search:    []string{"invalid domain!"},
+				},
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid v2 search domain, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid search domain") {
+		t.Errorf("error %q should mention invalid search domain", err.Error())
+	}
+}
+
 func TestGenerateSystemdNetworkConfig_InvalidNameserver(t *testing.T) {
 	dir := t.TempDir()
 	config := types.NetworkConfig{
@@ -839,6 +965,33 @@ func TestIsValidIPAddress(t *testing.T) {
 		if isValidIPAddress(ip) {
 			t.Errorf("isValidIPAddress(%q) = true, want false", ip)
 		}
+	}
+}
+
+func TestDeduplicateStrings(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []string
+		want  []string
+	}{
+		{"nil slice", nil, []string{}},
+		{"empty slice", []string{}, []string{}},
+		{"no duplicates", []string{"a", "b", "c"}, []string{"a", "b", "c"}},
+		{"all same", []string{"x", "x", "x"}, []string{"x"}},
+		{"preserves first-seen order", []string{"b", "a", "b", "c", "a"}, []string{"b", "a", "c"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deduplicateStrings(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("len = %d, want %d: got %v", len(got), len(tt.want), got)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Errorf("[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 
