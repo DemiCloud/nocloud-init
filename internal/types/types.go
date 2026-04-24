@@ -1,10 +1,12 @@
 package types
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 
-	"gopkg.in/yaml.v2"
+	"gopkg.in/yaml.v3"
 )
 
 type UserData struct {
@@ -65,8 +67,21 @@ type NetworkConfigV2Ethernet struct {
 	} `yaml:"nameservers" json:"nameservers"`
 }
 
-func UnmarshalUserData(data []byte, ud *UserData) error {
-	yamlErr := yaml.Unmarshal(data, ud)
+func unmarshalYAML(data []byte, v interface{}, strict bool) error {
+	if strict {
+		dec := yaml.NewDecoder(bytes.NewReader(data))
+		dec.KnownFields(true)
+		err := dec.Decode(v)
+		if err == io.EOF {
+			return nil
+		}
+		return err
+	}
+	return yaml.Unmarshal(data, v)
+}
+
+func UnmarshalUserData(data []byte, ud *UserData, strict bool) error {
+	yamlErr := unmarshalYAML(data, ud, strict)
 	if yamlErr == nil {
 		return nil
 	}
@@ -77,8 +92,8 @@ func UnmarshalUserData(data []byte, ud *UserData) error {
 	}
 }
 
-func UnmarshalNetworkConfig(data []byte, nc *NetworkConfig) error {
-	yamlErr := yaml.Unmarshal(data, nc)
+func UnmarshalNetworkConfig(data []byte, nc *NetworkConfig, strict bool) error {
+	yamlErr := unmarshalYAML(data, nc, strict)
 	if yamlErr == nil {
 		return nil
 	}
