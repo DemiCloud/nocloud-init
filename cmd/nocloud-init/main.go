@@ -170,6 +170,13 @@ Options:
 				safeUserData.Password = "[REDACTED]"
 			}
 			slog.Debug("parsed user-data", "userData", safeUserData)
+			if userData.Chpasswd.Expire {
+				// chpasswd.expire is accepted for spec compatibility but not
+				// implemented: forcing a password change on every boot would
+				// lock out the user, which is the opposite of the intended effect
+				// in a re-run-every-boot tool.
+				slog.Debug("chpasswd.expire is set but not implemented; ignoring")
+			}
 		}
 	} else {
 		slog.Info("no user-data found, skipping", "path", userDataPath)
@@ -190,7 +197,11 @@ Options:
 			os.Exit(1)
 		}
 		if metaData.InstanceID == "" {
-			slog.Warn("meta-data does not contain instance-id (required by NoCloud spec)")
+			// instance-id is required by the NoCloud spec for standard cloud-init,
+			// where it gates first-boot detection.  nocloud-init is stateless and
+			// re-runs every boot, so instance-id has no operational meaning here;
+			// log at debug level only.
+			slog.Debug("meta-data does not contain instance-id")
 		}
 		slog.Debug("parsed meta-data", "metaData", metaData)
 	} else {

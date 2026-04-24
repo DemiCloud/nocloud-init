@@ -227,7 +227,29 @@ func GenerateSystemdNetworkConfig(config types.NetworkConfig) error {
 	return generateSystemdNetworkConfigTo(config, systemdNetworkDir, resolvConfPath)
 }
 
+// cleanStaleCIDataFiles removes all previously-written `10-cloud-init-*` files
+// from networkDir.  This is called at the start of every run so that NICs
+// removed or renamed in the hypervisor UI are not left behind in
+// /etc/systemd/network — which would cause systemd-networkd to attempt to
+// configure hardware that no longer exists.
+func cleanStaleCIDataFiles(networkDir string) error {
+	matches, err := filepath.Glob(filepath.Join(networkDir, "10-cloud-init-*"))
+	if err != nil {
+		return fmt.Errorf("failed to glob stale cloud-init files in %s: %w", networkDir, err)
+	}
+	for _, path := range matches {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove stale cloud-init file %s: %w", path, err)
+		}
+		slog.Debug("removed stale cloud-init network file", "path", path)
+	}
+	return nil
+}
+
 func generateSystemdNetworkConfigTo(config types.NetworkConfig, networkDir, resolvPath string) error {
+	if err := cleanStaleCIDataFiles(networkDir); err != nil {
+		return err
+	}
 	switch config.Version {
 	case 1:
 		return generateV1NetworkConfig(config, networkDir, resolvPath)
