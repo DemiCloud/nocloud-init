@@ -54,6 +54,35 @@ func TestIsValidHostname(t *testing.T) {
 	}
 }
 
+func TestIsValidHashedPassword(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		// valid crypt(3) hashes
+		{"$6$rounds=5000$salt$longhash", true},        // SHA-512
+		{"$5$salt$hash", true},                        // SHA-256
+		{"$y$j9T$salt$hash", true},                    // yescrypt
+		{"$2b$12$saltandhash", true},                  // bcrypt
+		{"$1$salt$hash", true},                        // MD5 (legacy)
+		// invalid: plaintext
+		{"password", false},
+		{"", false},
+		{"$", false},
+		{"$$hash", false},  // empty ID
+		{"$ $hash", false}, // space in ID
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := IsValidHashedPassword(tt.input)
+			if got != tt.want {
+				t.Errorf("IsValidHashedPassword(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUpdateHostsFile(t *testing.T) {
 	tests := []struct {
 		name          string

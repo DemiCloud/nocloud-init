@@ -87,6 +87,29 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// IsValidHashedPassword reports whether s looks like a crypt(3) hashed
+// password (i.e. has the form "$<id>$...").  It does not verify the hash
+// itself — only that the value is not a bare plaintext string.
+// All standard crypt(3) algorithms (SHA-512, SHA-256, yescrypt, bcrypt, …)
+// begin with "$<alphanumeric-id>$".
+func IsValidHashedPassword(s string) bool {
+	if len(s) < 3 || s[0] != '$' {
+		return false
+	}
+	rest := s[1:]
+	end := strings.IndexByte(rest, '$')
+	if end <= 0 {
+		return false
+	}
+	id := rest[:end]
+	for _, c := range id {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+			return false
+		}
+	}
+	return true
+}
+
 func UpdatePassword(user, hashedPassword string) error {
 	return updatePasswordCmd(exec.Command("chpasswd", "-e"), user, hashedPassword)
 }
