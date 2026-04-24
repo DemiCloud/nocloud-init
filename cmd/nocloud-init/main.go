@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,6 +24,20 @@ var (
 	date    = "unknown"
 	builtBy = "unknown"
 )
+
+// isCloudConfigFormat returns true if data begins with the "#cloud-config"
+// header required by the cloud-config user-data format.  Other user-data
+// formats (shell scripts starting with "#!", MIME multipart, etc.) are not
+// supported and must be skipped rather than reported as a parse error.
+func isCloudConfigFormat(data []byte) bool {
+	// Strip optional UTF-8 BOM before inspecting the first line.
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
+	line := data
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		line = data[:i]
+	}
+	return bytes.EqualFold(bytes.TrimRight(line, "\r "), []byte("#cloud-config"))
+}
 
 func printVersion() {
 	fmt.Printf("%s %s\n", service.ServiceName, version)
@@ -142,21 +157,60 @@ Options:
 	if err == nil {
 		slog.Info("read user-data", "path", userDataPath)
 
-		if err := types.UnmarshalUserData(userDataContent, &userData, *strictFlag); err != nil {
-			slog.Error("failed to parse user-data", "error", err)
-			os.Exit(1)
+		trimmed := bytes.TrimSpace(userDataContent)
+		if len(trimmed) > 0 && !isCloudConfigFormat(trimmed) {
+			slog.Warn("user-data is not cloud-config format; only #cloud-config is supported — skipping")
+		} else {
+			if err := types.UnmarshalUserData(userDataContent, &userData, *strictFlag); err != nil {
+				slog.Error("failed to parse user-data", "error", err)
+				os.Exit(1)
+			}
+			safeUserData := userData
+			if safeUserData.Password != "" {
+				safeUserData.Password = "[REDACTED]"
+			}
+			slog.Debug("parsed user-data", "userData", safeUserData)
 		}
-		safeUserData := userData
-		if safeUserData.Password != "" {
-			safeUserData.Password = "[REDACTED]"
-		}
-		slog.Debug("parsed user-data", "userData", safeUserData)
 	} else {
 		slog.Info("no user-data found, skipping", "path", userDataPath)
 	}
 
-	if userData.Hostname != "" && !system.IsValidHostname(userData.Hostname) {
-		slog.Error("invalid hostname", "hostname", userData.Hostname)
+	// Read meta-data for instance-id and fallback hostname.
+	metaDataPath := filepath.Join(mountDir, "meta-data")
+	var metaData types.MetaData
+	metaDataContent, err := os.ReadFile(metaDataPath)
+	if err != nil && !os.IsNotExist(err) {
+		slog.Error("failed to read meta-data", "path", metaDataPath, "error", err)
+		os.Exit(1)
+	}
+	if err == nil {
+		slog.Info("read meta-data", "path", metaDataPath)
+		if err := types.UnmarshalMetaData(metaDataContent, &metaData, *strictFlag); err != nil {
+			slog.Error("failed to parse meta-data", "error", err)
+			os.Exit(1)
+		}
+		if metaData.InstanceID == "" {
+			slog.Warn("meta-data does not contain instance-id (required by NoCloud spec)")
+		}
+		slog.Debug("parsed meta-data", "metaData", metaData)
+	} else {
+		slog.Info("no meta-data found, skipping", "path", metaDataPath)
+	}
+
+	// Resolve effective hostname: user-data takes precedence over meta-data.
+	hostname := userData.Hostname
+	if hostname == "" {
+		if metaData.LocalHostname != "" {
+			hostname = metaData.LocalHostname
+			slog.Debug("using hostname from meta-data local-hostname", "hostname", hostname)
+		} else if metaData.Hostname != "" {
+			hostname = metaData.Hostname
+			slog.Debug("using hostname from meta-data", "hostname", hostname)
+		}
+	}
+
+	if hostname != "" && !system.IsValidHostname(hostname) {
+		slog.Error("invalid hostname", "hostname", hostname)
 		os.Exit(1)
 	}
 	if userData.FQDN != "" && !system.IsValidHostname(userData.FQDN) {
@@ -164,12 +218,12 @@ Options:
 		os.Exit(1)
 	}
 
-	if userData.Hostname != "" {
-		if err := system.UpdateHostname(userData.Hostname); err != nil {
+	if hostname != "" {
+		if err := system.UpdateHostname(hostname); err != nil {
 			slog.Error("failed to update hostname", "error", err)
 			os.Exit(1)
 		}
-		slog.Info("updated hostname", "hostname", userData.Hostname)
+		slog.Info("updated hostname", "hostname", hostname)
 	}
 
 	if userData.User != "" && userData.Password != "" {
@@ -184,7 +238,11 @@ Options:
 		slog.Info("updated password", "user", userData.User)
 	}
 
-	if err := system.UpdateHostsFile(userData); err != nil {
+	// Pass effective hostname into hosts-file update so meta-data-sourced
+	// hostnames are reflected there too.
+	effectiveUserData := userData
+	effectiveUserData.Hostname = hostname
+	if err := system.UpdateHostsFile(effectiveUserData); err != nil {
 		slog.Error("failed to update /etc/hosts", "error", err)
 		os.Exit(1)
 	}

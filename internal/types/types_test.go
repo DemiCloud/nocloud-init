@@ -517,6 +517,77 @@ func TestUnmarshalNetworkConfig_EmptyInput(t *testing.T) {
 	}
 }
 
+func TestUnmarshalMetaData(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    MetaData
+		wantErr bool
+	}{
+		{
+			name:  "full fixture",
+			input: mustReadFile(t, "testdata/nocloud-meta-data.yaml"),
+			want: MetaData{
+				InstanceID:    "iid-local01",
+				LocalHostname: "myvm",
+				Hostname:      "myvm.example.com",
+			},
+		},
+		{
+			name:  "instance-id only",
+			input: "instance-id: iid-abcdefg\n",
+			want:  MetaData{InstanceID: "iid-abcdefg"},
+		},
+		{
+			name:  "local-hostname only",
+			input: "instance-id: iid-x\nlocal-hostname: myhost\n",
+			want:  MetaData{InstanceID: "iid-x", LocalHostname: "myhost"},
+		},
+		{
+			name:  "hostname only (no local-hostname)",
+			input: "instance-id: iid-x\nhostname: myhost\n",
+			want:  MetaData{InstanceID: "iid-x", Hostname: "myhost"},
+		},
+		{
+			name:  "json format",
+			input: `{"instance-id":"iid-json","local-hostname":"jsonhost"}`,
+			want:  MetaData{InstanceID: "iid-json", LocalHostname: "jsonhost"},
+		},
+		{
+			name:  "empty input yields zero value",
+			input: "",
+			want:  MetaData{},
+		},
+		{
+			name:    "invalid input",
+			input:   "}{:::not yaml or json:::",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var md MetaData
+			err := UnmarshalMetaData([]byte(tt.input), &md, false)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("UnmarshalMetaData() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if md.InstanceID != tt.want.InstanceID {
+				t.Errorf("InstanceID = %q, want %q", md.InstanceID, tt.want.InstanceID)
+			}
+			if md.LocalHostname != tt.want.LocalHostname {
+				t.Errorf("LocalHostname = %q, want %q", md.LocalHostname, tt.want.LocalHostname)
+			}
+			if md.Hostname != tt.want.Hostname {
+				t.Errorf("Hostname = %q, want %q", md.Hostname, tt.want.Hostname)
+			}
+		})
+	}
+}
+
 func mustReadFile(t *testing.T, path string) string {	t.Helper()
 	b, err := os.ReadFile(path)
 	if err != nil {

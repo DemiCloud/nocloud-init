@@ -39,10 +39,19 @@ func MountISO(mountPoint string) (string, error) {
 	}
 
 	const flags = unix.MS_RDONLY | unix.MS_NOEXEC | unix.MS_NOSUID | unix.MS_NODEV
-	if err := unix.Mount(device, mountPoint, "iso9660", flags, ""); err != nil {
-		return "", fmt.Errorf("failed to mount %s: %v", device, err)
+
+	// The NoCloud spec allows both ISO 9660 and vfat CIDATA volumes.
+	// Try iso9660 first (the most common format), then fall back to vfat.
+	if err := unix.Mount(device, mountPoint, "iso9660", flags, ""); err == nil {
+		return device, nil
+	} else if !errors.Is(err, unix.EINVAL) {
+		// EINVAL means "wrong filesystem type"; any other error is a real failure.
+		return "", fmt.Errorf("failed to mount %s as iso9660: %v", device, err)
 	}
 
+	if err := unix.Mount(device, mountPoint, "vfat", flags, ""); err != nil {
+		return "", fmt.Errorf("failed to mount %s as iso9660 or vfat: %v", device, err)
+	}
 	return device, nil
 }
 
