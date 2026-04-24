@@ -150,7 +150,7 @@ Follow the conventional-commits style used in the repo since v1.1.0:
 This binary runs as root on every boot. Apply extra scrutiny to any change that:
 
 - Writes to `/etc/` or `/etc/systemd/network/`
-- Calls external binaries (`usermod`, `ssh-keygen`)
+- Calls external binaries (`chpasswd`, `ssh-keygen`)
 - Parses untrusted user-data from the CIDATA ISO
 - Touches mount/unmount logic
 
