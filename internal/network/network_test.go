@@ -555,6 +555,55 @@ func TestUpdateResolvConfAt_SymlinkRejected(t *testing.T) {
 	}
 }
 
+// TestGenerateSystemdNetworkConfig_V2DuplicateNameservers verifies that when two
+// interfaces share a nameserver, only one nameserver line appears in resolv.conf.
+func TestGenerateSystemdNetworkConfig_V2DuplicateNameservers(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	sharedNS := struct {
+		Addresses []string `yaml:"addresses" json:"addresses"`
+		Search    []string `yaml:"search" json:"search"`
+	}{
+		Addresses: []string{"192.0.2.1"},
+		Search:    []string{"example.com"},
+	}
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:       struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "52:54:00:11:22:33"},
+				SetName:     "eth0",
+				DHCP4:       true,
+				Nameservers: sharedNS,
+			},
+			"eth1": {
+				Match:       struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "52:54:00:44:55:66"},
+				SetName:     "eth1",
+				DHCP4:       true,
+				Nameservers: sharedNS,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	content, err := os.ReadFile(resolvPath)
+	if err != nil {
+		t.Fatalf("failed to read resolv.conf: %v", err)
+	}
+	got := string(content)
+
+	// Exactly one nameserver line must appear for the shared address.
+	count := strings.Count(got, "nameserver 192.0.2.1")
+	if count != 1 {
+		t.Errorf("expected exactly 1 occurrence of 'nameserver 192.0.2.1', got %d\n%s", count, got)
+	}
+}
+
 func assertFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	b, err := os.ReadFile(path)

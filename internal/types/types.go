@@ -14,7 +14,9 @@ type UserData struct {
 	ManageEtcHosts bool   `yaml:"manage_etc_hosts" json:"manage_etc_hosts"`
 	FQDN           string `yaml:"fqdn" json:"fqdn"`
 	User           string `yaml:"user" json:"user"`
-	Password       string `yaml:"password" json:"password"`
+	// Password must be a pre-hashed credential (e.g. "$6$..."). Plaintext
+	// passwords are not supported; the value is passed verbatim to chpasswd -e.
+	Password string `yaml:"password" json:"password"`
 	// Chpasswd is defined by the NoCloud spec but Expire is not yet implemented.
 	Chpasswd struct {
 		Expire bool `yaml:"expire" json:"expire"`
