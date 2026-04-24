@@ -6,8 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"text/template"
-
-	"github.com/godbus/dbus/v5"
 )
 
 const ServiceName = "nocloud-init"
@@ -92,22 +90,11 @@ func InstallService() error {
 
 	slog.Info("installed systemd service", "path", servicePath)
 
-	// Attempt DBus connection (optional)
-	conn, err := dbus.SystemBus()
-	if err != nil {
-		slog.Warn("could not connect to system bus, enable service manually",
-			"command", "systemctl enable "+ServiceName+".service")
-		return nil
-	}
-	defer conn.Close()
-
-	obj := conn.Object("org.freedesktop.systemd1", "/org/freedesktop/systemd1")
-	call := obj.Call("org.freedesktop.systemd1.Manager.EnableUnitFiles", 0,
-		[]string{fmt.Sprintf("%s.service", ServiceName)}, false, true)
-
-	if call.Err != nil {
+	cmd := exec.Command("systemctl", "enable", ServiceName+".service")
+	if out, err := cmd.CombinedOutput(); err != nil {
 		slog.Warn("could not enable service automatically, enable manually",
-			"command", "systemctl enable "+ServiceName+".service")
+			"command", "systemctl enable "+ServiceName+".service",
+			"error", string(out))
 		return nil
 	}
 
