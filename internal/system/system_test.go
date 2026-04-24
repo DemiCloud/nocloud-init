@@ -99,6 +99,18 @@ func TestUpdateHostsFile(t *testing.T) {
 			wantContains: []string{"127.0.0.1 localhost"},
 			wantAbsent:   []string{"127.0.1.1"},
 		},
+		{
+			name: "empty FQDN produces single-space entry",
+			initialHosts: `127.0.0.1 localhost
+`,
+			userData: types.UserData{
+				ManageEtcHosts: true,
+				Hostname:       "myhost",
+				FQDN:           "",
+			},
+			wantContains: []string{"127.0.1.1 myhost"},
+			wantAbsent:   []string{"127.0.1.1  myhost"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -125,6 +137,11 @@ func TestUpdateHostsFile(t *testing.T) {
 			for _, want := range tt.wantContains {
 				if !strings.Contains(result, want) {
 					t.Errorf("result missing %q\ngot:\n%s", want, result)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(result, absent) {
+					t.Errorf("result should not contain %q\ngot:\n%s", absent, result)
 				}
 			}
 		})
