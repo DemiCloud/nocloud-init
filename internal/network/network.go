@@ -23,6 +23,14 @@ func isValidInterfaceName(name string) bool {
 	return ifaceNameRe.MatchString(name)
 }
 
+// isValidMACAddress returns true if mac is a non-empty string that net.ParseMAC
+// can parse.  An empty string is treated as "no MAC specified" and skips
+// validation — the caller is responsible for deciding whether that is allowed.
+func isValidMACAddress(mac string) bool {
+	_, err := net.ParseMAC(mac)
+	return err == nil
+}
+
 const systemdNetworkDir = "/etc/systemd/network"
 const resolvConfPath = "/etc/resolv.conf"
 
@@ -184,6 +192,9 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if !isValidInterfaceName(entry.Name) {
 			return fmt.Errorf("invalid interface name %q: must match [a-zA-Z0-9:_-]+", entry.Name)
 		}
+		if entry.MacAddress != "" && !isValidMACAddress(entry.MacAddress) {
+			return fmt.Errorf("invalid MAC address %q for interface %s", entry.MacAddress, entry.Name)
+		}
 
 		if len(entry.Subnets) > 1 {
 			slog.Warn("interface has multiple subnets; only the first will be configured", "interface", entry.Name, "count", len(entry.Subnets))
@@ -304,6 +315,9 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 
 		if !isValidInterfaceName(ifaceName) {
 			return fmt.Errorf("invalid interface name %q: must match [a-zA-Z0-9:_-]+", ifaceName)
+		}
+		if mac := eth.Match.MACAddress; mac != "" && !isValidMACAddress(mac) {
+			return fmt.Errorf("invalid MAC address %q for interface %s", mac, ifaceName)
 		}
 
 		var address string
