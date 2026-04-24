@@ -197,13 +197,13 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			}
 		}
 
-		networkFilePath := fmt.Sprintf("%s/10-cloud-init-%s.network", networkDir, entry.Name)
+		networkFilePath := filepath.Join(networkDir, "10-cloud-init-"+entry.Name+".network")
 		networkFile, err := os.Create(networkFilePath)
 		if err != nil {
 			return fmt.Errorf("failed to create network config file for %s: %v", entry.Name, err)
 		}
 
-		linkFilePath := fmt.Sprintf("%s/10-cloud-init-%s.link", networkDir, entry.Name)
+		linkFilePath := filepath.Join(networkDir, "10-cloud-init-"+entry.Name+".link")
 		linkFile, err := os.Create(linkFilePath)
 		if err != nil {
 			networkFile.Close()
@@ -308,13 +308,13 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			}
 		}
 
-		networkFilePath := fmt.Sprintf("%s/10-cloud-init-%s.network", networkDir, ifaceName)
+		networkFilePath := filepath.Join(networkDir, "10-cloud-init-"+ifaceName+".network")
 		networkFile, err := os.Create(networkFilePath)
 		if err != nil {
 			return fmt.Errorf("failed to create network config file for %s: %v", ifaceName, err)
 		}
 
-		linkFilePath := fmt.Sprintf("%s/10-cloud-init-%s.link", networkDir, ifaceName)
+		linkFilePath := filepath.Join(networkDir, "10-cloud-init-"+ifaceName+".link")
 		linkFile, err := os.Create(linkFilePath)
 		if err != nil {
 			networkFile.Close()
