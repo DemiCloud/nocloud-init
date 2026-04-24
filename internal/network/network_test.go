@@ -25,6 +25,8 @@ func TestNetmaskToCIDR(t *testing.T) {
 		{"not-a-mask", 0, true},
 		{"", 0, true},
 		{"999.999.999.999", 0, true},
+		// non-contiguous mask must be rejected
+		{"255.0.255.0", 0, true},
 	}
 
 	for _, tt := range tests {
