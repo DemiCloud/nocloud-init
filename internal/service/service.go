@@ -16,18 +16,20 @@ const systemdServiceDir = "/etc/systemd/system"
 const systemdNetworkDir = "/etc/systemd/network"
 
 const systemdServiceTemplate = `[Unit]
-Description=Cloud-Init NoCloud initialization
+Description={{.ServiceDescription}}
 Documentation=https://github.com/demicloud/nocloud-init
 DefaultDependencies=no
 
-# /etc and block devices must exist
+# /etc and block device symlinks (/dev/disk/by-label) must be available
 After=local-fs.target
 
-# Run before udev settles NIC naming
+# Write .link files before udev settles NIC naming
 Before=systemd-udev-settle.service
 
-# Run before networkd consumes link/network files
+# Write .network/.link files before networkd reads its config
 Before=systemd-networkd.service
+
+# Ordering relative to network milestones
 Before=network-pre.target
 Before=network.target
 Before=network-online.target
@@ -40,14 +42,28 @@ ExecStart={{.ExecPath}}
 RemainAfterExit=yes
 StandardOutput=journal+console
 
-PrivateTmp=true
-NoNewPrivileges=true
-ProtectControlGroups=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
+# Filesystem hardening — /etc is whitelisted for writes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/etc
+ProtectHome=yes
+
+# Privilege hardening
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+
+# Kernel hardening
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
 
 [Install]
-WantedBy=sysinit.target
+WantedBy=network-pre.target
 `
 
 var requiredPrograms = []string{
@@ -72,11 +88,11 @@ func InstallService() error {
 	}
 
 	data := struct {
-		ExecPath    string
-		ServiceName string
+		ExecPath           string
+		ServiceDescription string
 	}{
-		ExecPath:    execPath,
-		ServiceName: ServiceName,
+		ExecPath:           execPath,
+		ServiceDescription: ServiceDescription,
 	}
 
 	var buf bytes.Buffer
@@ -105,10 +121,11 @@ func InstallService() error {
 
 func CheckPrograms() error {
 	for _, program := range requiredPrograms {
-		if _, err := exec.LookPath(program); err != nil {
+		path, err := exec.LookPath(program)
+		if err != nil {
 			return fmt.Errorf("required program %s is not installed", program)
 		}
-		slog.Debug("program available", "program", program)
+		slog.Info("program available", "program", program, "path", path)
 	}
 	return nil
 }
@@ -118,7 +135,7 @@ func CheckDirectories() error {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			return fmt.Errorf("required directory %s does not exist", dir)
 		}
-		slog.Debug("directory exists", "dir", dir)
+		slog.Info("directory exists", "dir", dir)
 	}
 	return nil
 }

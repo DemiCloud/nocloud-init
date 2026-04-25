@@ -131,7 +131,7 @@ Name={{.Name}}
 
 [Network]
 {{- if .DHCP }}
-DHCP=yes
+DHCP=ipv4
 {{- else }}
 Address={{.Address}}/{{.CIDR}}
 {{- if .Gateway }}
