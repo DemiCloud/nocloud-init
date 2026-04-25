@@ -19,28 +19,23 @@ RELEASE_LDFLAGS := $(LDFLAGS) -s -w \
 # Target platforms
 PLATFORMS := linux/amd64 linux/arm64
 
-.PHONY: build test vet install release clean
+.PHONY: build test vet install release clean help
 
-# Default: development build (debug symbols, version = "dev" if no tags)
-build:
+build: ## Development build → build/nocloud-init (debug symbols; version = "dev" if no tags)
 	mkdir -p build
 	go mod tidy
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o build/$(NAME) ./cmd/nocloud-init/
 
-# Run all tests
-test:
+test: ## Run the test suite
 	go test -count=1 ./...
 
-# Run static analysis
-vet:
+vet: ## Run go vet static analysis
 	go vet ./...
 
-# Install binary into $(BINDIR) — supports DESTDIR for packaging
-install: build
+install: build ## Install binary to $(DESTDIR)$(BINDIR) (default: /usr/local/sbin)
 	install -D -m 0755 build/$(NAME) $(DESTDIR)$(BINDIR)/$(NAME)
 
-# Release builds: static, stripped, trimpath, multi-arch tarballs in dist/
-release: clean
+release: clean ## Stripped, trimpath, multi-arch release tarballs → dist/
 	mkdir -p dist
 	@set -e; for platform in $(PLATFORMS); do \
 		OS=$$(echo $$platform | cut -d/ -f1); \
@@ -55,5 +50,9 @@ release: clean
 	@echo "==> Checksums"
 	cd dist && sha256sum *.tar.gz > checksums.txt && cat checksums.txt
 
-clean:
+clean: ## Remove build/ and dist/
 	rm -rf build dist
+
+help: ## Show this help message
+	@awk 'BEGIN {FS = ":.*##"; printf "Usage: make \033[36m<target>\033[0m\n\nTargets:\n"} \
+	     /^[a-zA-Z_-]+:.*##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
