@@ -29,6 +29,9 @@ go.work.sum
 # Scratch directory
 /scratch/
 
+# Wiki (managed as a separate git repository)
+/.wiki/
+
 # Editor/OS junk (optional)
 *.swp
 *.swo

@@ -1,37 +1,21 @@
 # nocloud-init
 
+A minimal [NoCloud](https://docs.cloud-init.io/en/latest/reference/datasources/nocloud.html) datasource client. It detects a CIDATA-labelled ISO 9660 or vfat volume, mounts it, reads `user-data`, `meta-data`, and `network-config`, and applies system configuration deterministically on every boot. If no CIDATA device is present, it exits cleanly without modifying the system.
+
 ## Table of Contents
-- [Design Philosophy](#design-philosophy)
+
 - [Supported Features](#supported-features)
-- [Intentional Divergence from Cloud-Init](#intentional-divergence-from-cloud-init)
 - [Dependencies](#dependencies)
-- [Known Compatible Platforms](#known-compatible-platforms)
 - [Compiling](#compiling)
-  - [Using Make](#using-make-recommended)
+  - [Using Make (recommended)](#using-make-recommended)
   - [Using Go directly](#using-go-directly)
 - [Installation & Usage](#installation--usage)
-  - [Install the binary](#1-install-the-binary)
-  - [Install and enable the systemd service](#2-install-and-enable-the-systemd-service)
-  - [Provide NoCloud seed data](#3-provide-nocloud-seed-data)
+  - [1. Install the binary](#1-install-the-binary)
+  - [2. Install and enable the systemd service](#2-install-and-enable-the-systemd-service)
+  - [3. Provide NoCloud seed data](#3-provide-nocloud-seed-data)
   - [CLI options](#cli-options)
 - [Disabling](#disabling)
-- [Docs](#docs)
-
-A minimal [NoCloud](https://docs.cloud-init.io/en/latest/reference/datasources/nocloud.html) datasource client. It detects a CIDATA‑labelled ISO 9660 or vfat volume, mounts it, reads `user-data`, `meta-data`, and `network-config`, and applies system configuration deterministically. If no CIDATA device is present, it exits cleanly without modifying the system.
-
-## Design Philosophy
-
-The reference cloud-init client is a general-purpose provisioning system designed to accommodate every cloud provider and every possible workload. That generality comes at a cost: it is large, slow, opinionated, and — critically — **designed to run only once per instance lifetime**.
-
-`nocloud-init` makes a different trade-off: **it is stateless and runs on every boot**. This means that if you change a VM's IP address, hostname, or network configuration in your hypervisor's UI, the change takes effect on the next reboot without re-provisioning or re-deploying the VM. There is no per-instance state file, no lock file, and no "already ran" marker.
-
-This approach is well-suited to environments where:
-
-- A hypervisor or orchestration layer generates the CIDATA ISO automatically from a UI or API (e.g., Proxmox VE, libvirt, or a custom provisioning pipeline)
-- VMs are long-lived and their configuration is expected to drift over time
-- The operator wants to converge a running VM's network identity to the desired state without rebuilding it
-
-The binary is a single static executable with no runtime dependencies beyond `chpasswd` and `ssh-keygen`. It is designed to start and complete in milliseconds, well before `systemd-networkd` begins interface configuration.
+- [Wiki](#wiki)
 
 ## Supported Features
 
@@ -55,40 +39,7 @@ The binary is a single static executable with no runtime dependencies beyond `ch
 
 ### Meta-data
 - `instance-id`, `local-hostname`, and `hostname` fields are parsed from `meta-data`
-- `instance-id` is not used operationally (see [below](#intentional-divergence-from-cloud-init))
-
-## Intentional Divergence from Cloud-Init
-
-These are deliberate design decisions, not gaps.
-
-### `instance-id` is not used to gate execution
-
-Standard cloud-init uses `instance-id` to detect "first boot" and skip all processing on subsequent boots. `nocloud-init` does the opposite: it runs on every boot by design. The `instance-id` field is parsed and logged (at debug level) for spec compatibility, but it has no effect on whether configuration is applied.
-
-### Remote `seedfrom` sources are not supported
-
-The NoCloud spec allows configuration to be fetched from HTTP, HTTPS, or FTP via a `seedfrom` URL in the kernel command line or SMBIOS serial number. `nocloud-init` does not implement this because:
-
-1. It runs *before* `systemd-networkd` starts, so the network is not available.
-2. Adding URL fetching would introduce timeouts, retries, TLS handling, and a significant remote-code-execution attack surface on a binary that runs as root at boot.
-
-Only the local CIDATA volume (Source 2 in the NoCloud spec) is supported.
-
-### `vendor-data` is not processed
-
-`vendor-data` exists in the spec to let a cloud provider inject defaults that tenant `user-data` can override — it is a mechanism for separating operator config from user config. In the CIDATA ISO model, the same party creates both files on the same volume, so this separation has no practical meaning. A `vendor-data` file on the volume is silently ignored.
-
-### `chpasswd.expire` is accepted but not applied
-
-The field is parsed for spec compatibility, but setting `expire: true` in a re-run-every-boot tool would force a password-change prompt on every reboot, which is the opposite of the intended behaviour. It is logged at debug level and otherwise ignored.
-
-### `users` is accepted but not applied
-
-The `users` list is parsed for spec compatibility. Proxmox VE does not populate it and full user lifecycle management (creation, SSH authorised-keys injection, sudo rules) is outside the scope of this tool. The field is silently ignored.
-
-### Only `#cloud-config` user-data is supported
-
-User-data formats other than `#cloud-config` (shell scripts starting with `#!`, MIME multipart, Jinja2 templates, etc.) are detected and skipped with a warning rather than producing a parse error. `nocloud-init` only implements the fields relevant to identity and network configuration.
+- `instance-id` is informational only; it does not gate execution (see [Why nocloud-init](https://github.com/demicloud/nocloud-init/wiki/Why-nocloud-init))
 
 ## Dependencies
 - `chpasswd` — for password updates (reads `user:hash` from stdin; the hash is never exposed in the process list)
@@ -96,11 +47,6 @@ User-data formats other than `#cloud-config` (shell scripts starting with `#!`, 
 
 ### Network configuration
 `nocloud-init` writes standard [systemd-networkd](https://www.freedesktop.org/software/systemd/man/latest/systemd.network.html) `.network` and `.link` files to `/etc/systemd/network/`. Any tool or service capable of consuming those files will work — `systemd-networkd` is the typical choice but is not a hard dependency.
-
-## Known Compatible Platforms
-- Proxmox Virtual Environment (via CIDATA ISO attachment)
-- libvirt / QEMU with a cloud-init ISO (`genisoimage -volid cidata …`)
-- Any hypervisor that generates a CIDATA-labelled ISO 9660 or vfat volume
 
 ## Compiling
 
@@ -166,8 +112,13 @@ The service will detect the volume, mount it, parse the files, and apply configu
 ## Disabling
 To disable execution, create the standard cloud-init disable marker:
 
-`touch /etc/cloud/cloud-init.disabled`
+```
+touch /etc/cloud/cloud-init.disabled
+```
 
-## Docs
+## Wiki
 
-- [docs/workflow.md](docs/workflow.md) — Mermaid flowchart of the full boot-time execution path
+- [Why nocloud-init](https://github.com/demicloud/nocloud-init/wiki/Why-nocloud-init) — Design rationale and comparison with the reference cloud-init client
+- [Supported Hypervisors](https://github.com/demicloud/nocloud-init/wiki/Supported-Hypervisors) — Platforms known to generate compatible CIDATA volumes
+- [Workflow](https://github.com/demicloud/nocloud-init/wiki/Workflow) — Full boot-time execution flowchart
+- [FAQ](https://github.com/demicloud/nocloud-init/wiki/FAQ) — Common questions and clarifications
