@@ -16,15 +16,20 @@ RELEASE_LDFLAGS := $(LDFLAGS) -s -w \
 	-X main.date=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ") \
 	-X main.builtBy=$(BUILT_BY)
 
-# Target platforms
-PLATFORMS := linux/amd64 linux/arm64
+# Target platforms for `make release`
+PLATFORMS := linux/amd64 linux/arm64 linux/arm linux/386
 
-.PHONY: build test vet install release clean help
+.PHONY: build build-release test vet install release clean help
 
 build: ## Development build → build/nocloud-init (debug symbols; version = "dev" if no tags)
 	mkdir -p build
 	go mod tidy
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o build/$(NAME) ./cmd/nocloud-init/
+
+build-release: ## Release build for the local system → build/nocloud-init (stripped, trimpath, full metadata)
+	mkdir -p build
+	go mod tidy
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(RELEASE_LDFLAGS)" -o build/$(NAME) ./cmd/nocloud-init/
 
 test: ## Run the test suite
 	go test -count=1 ./...
@@ -32,7 +37,7 @@ test: ## Run the test suite
 vet: ## Run go vet static analysis
 	go vet ./...
 
-install: build ## Install binary to $(DESTDIR)$(BINDIR) (default: /usr/local/sbin)
+install: build-release ## Build release binary for local system and install to $(DESTDIR)$(BINDIR) (default: /usr/local/sbin)
 	install -D -m 0755 build/$(NAME) $(DESTDIR)$(BINDIR)/$(NAME)
 
 release: clean ## Stripped, trimpath, multi-arch release tarballs → dist/
