@@ -17,7 +17,7 @@ RELEASE_LDFLAGS := $(LDFLAGS) -s -w \
 	-X main.builtBy=$(BUILT_BY)
 
 # Target platforms for `make release`
-PLATFORMS := linux/amd64 linux/arm64 linux/arm linux/386
+PLATFORMS := linux/amd64 linux/arm64
 
 .PHONY: build build-release test vet install release clean help
 
