@@ -13,7 +13,9 @@
   - [Install the binary](#1-install-the-binary)
   - [Install and enable the systemd service](#2-install-and-enable-the-systemd-service)
   - [Provide NoCloud seed data](#3-provide-nocloud-seed-data)
+  - [CLI options](#cli-options)
 - [Disabling](#disabling)
+- [Docs](#docs)
 
 A minimal [NoCloud](https://docs.cloud-init.io/en/latest/reference/datasources/nocloud.html) datasource client. It detects a CIDATA‑labelled ISO 9660 or vfat volume, mounts it, reads `user-data`, `meta-data`, and `network-config`, and applies system configuration deterministically. If no CIDATA device is present, it exits cleanly without modifying the system.
 
@@ -44,6 +46,7 @@ The binary is a single static executable with no runtime dependencies beyond `ch
 
 ### System identity
 - Hostname from `user-data` (takes precedence) or `meta-data` (`local-hostname` / `hostname` fallback)
+- FQDN from `user-data.fqdn`; used as the primary name in the `/etc/hosts` loopback entry when set
 - `/etc/hosts` loopback entry for proper FQDN resolution (e.g. `hostname -f`)
 
 ### User management
@@ -79,6 +82,10 @@ Only the local CIDATA volume (Source 2 in the NoCloud spec) is supported.
 
 The field is parsed for spec compatibility, but setting `expire: true` in a re-run-every-boot tool would force a password-change prompt on every reboot, which is the opposite of the intended behaviour. It is logged at debug level and otherwise ignored.
 
+### `users` is accepted but not applied
+
+The `users` list is parsed for spec compatibility. Proxmox VE does not populate it and full user lifecycle management (creation, SSH authorised-keys injection, sudo rules) is outside the scope of this tool. The field is silently ignored.
+
 ### Only `#cloud-config` user-data is supported
 
 User-data formats other than `#cloud-config` (shell scripts starting with `#!`, MIME multipart, Jinja2 templates, etc.) are detected and skipped with a warning rather than producing a parse error. `nocloud-init` only implements the fields relevant to identity and network configuration.
@@ -97,8 +104,17 @@ User-data formats other than `#cloud-config` (shell scripts starting with `#!`, 
 
 ## Compiling
 
+Requires **Go 1.25** or later.
+
 ### Using Make (recommended)
 Running `make` builds the binary into `build/nocloud-init`.
+
+```
+make          # development build → build/nocloud-init
+make test     # run tests
+make vet      # run go vet
+make release  # stripped multi-arch tarballs → dist/
+```
 
 ### Using Go directly
 `go build -o build/nocloud-init ./cmd/nocloud-init/`
@@ -108,9 +124,17 @@ Running `make` builds the binary into `build/nocloud-init`.
 ### 1. Install the binary
 Place the compiled binary anywhere on the system. It does **not** need to be in `PATH` because the installer generates a systemd service with the correct absolute `ExecStart` path.
 
-Example:
+Using Make (installs to `/usr/local/sbin/` by default; override with `PREFIX=` or `DESTDIR=`):
 
-`sudo install -m 0755 build/nocloud-init /usr/local/sbin/nocloud-init`
+```
+sudo make install
+```
+
+Or manually:
+
+```
+sudo install -m 0755 build/nocloud-init /usr/local/sbin/nocloud-init
+```
 
 ### 2. Install and enable the systemd service
 Run the installer to write the service unit and enable it:
@@ -129,7 +153,21 @@ Attach a CIDATA-labelled ISO 9660 or vfat volume containing any combination of:
 
 The service will detect the volume, mount it, parse the files, and apply configuration on every boot.
 
+### CLI options
+
+| Flag | Short | Description |
+|---|---|---|
+| `--help` | `-h` | Display help information |
+| `--version` | `-V` | Display version and build metadata |
+| `--install` | `-i` | Write and enable the systemd service unit |
+| `--verbose` | `-v` | Enable debug-level logging to stderr |
+| `--strict` | `-s` | Reject unknown fields in `user-data` and `network-config` (useful for catching typos) |
+
 ## Disabling
 To disable execution, create the standard cloud-init disable marker:
 
 `touch /etc/cloud/cloud-init.disabled`
+
+## Docs
+
+- [docs/workflow.md](docs/workflow.md) — Mermaid flowchart of the full boot-time execution path
