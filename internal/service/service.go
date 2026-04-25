@@ -61,6 +61,40 @@ ProtectKernelLogs=yes
 ProtectKernelModules=yes
 ProtectKernelTunables=yes
 
+# Capability hardening — explicit allowlist restricted to what this service needs:
+#   CAP_SYS_ADMIN     mount(2), umount(2), sethostname(2)
+#   CAP_CHOWN         set ownership of files written to /etc
+#   CAP_DAC_OVERRIDE  write to files not owned by running user
+#   CAP_FOWNER        bypass owner checks (chmod, utimes) on /etc files
+#   CAP_SETGID        chpasswd subprocess may adjust group identity
+#   CAP_SETUID        chpasswd subprocess may adjust user identity
+#   CAP_SETPCAP       capability manipulation in child processes
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_SETGID CAP_SETUID CAP_SETPCAP
+
+# Hostname — intentionally changed via sethostname(2); must not be restricted.
+ProtectHostname=no
+
+# Devices — block device access required for CIDATA ISO mount; cannot restrict.
+PrivateDevices=no
+
+# Network — all operations are purely local; no sockets of any kind are needed.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+
+# Memory — static CGO_ENABLED=0 Go binary; writable-executable mappings not needed.
+MemoryDenyWriteExecute=yes
+
+# System call allowlist — restrict to calls actually made by this service.
+# @system-service covers read/write/open/close/stat/mmap/fork/exec and related.
+# sethostname, mount, and umount2 are used directly but outside @system-service.
+SystemCallFilter=@system-service sethostname mount umount2
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# File creation mask — new files must not be world-readable by default.
+UMask=0027
+
 [Install]
 WantedBy=network-pre.target
 `
