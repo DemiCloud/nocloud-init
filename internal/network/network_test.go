@@ -118,7 +118,7 @@ func TestGenerateSystemdNetworkConfig_V1Static(t *testing.T) {
 	assertFileContains(t, networkFile, "MACAddress=52:54:00:ab:cd:ef")
 	assertFileContains(t, networkFile, "Address=192.0.2.10/24")
 	assertFileContains(t, networkFile, "Gateway=192.0.2.1")
-	assertFileNotContains(t, networkFile, "DHCP=yes")
+	assertFileNotContains(t, networkFile, "DHCP=ipv4")
 
 	linkFile := filepath.Join(dir, "10-cloud-init-eth0.link")
 	assertFileContains(t, linkFile, "MACAddress=52:54:00:ab:cd:ef")
@@ -151,7 +151,7 @@ func TestGenerateSystemdNetworkConfig_V1DHCP(t *testing.T) {
 	}
 
 	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
-	assertFileContains(t, networkFile, "DHCP=yes")
+	assertFileContains(t, networkFile, "DHCP=ipv4")
 	assertFileNotContains(t, networkFile, "\nAddress=")
 	assertFileNotContains(t, networkFile, "Gateway=")
 
@@ -198,7 +198,7 @@ func TestGenerateSystemdNetworkConfig_V1SkipPhysicalWithNoSubnets(t *testing.T) 
 	}
 
 	// eth1 must still be configured.
-	assertFileContains(t, filepath.Join(dir, "10-cloud-init-eth1.network"), "DHCP=yes")
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-eth1.network"), "DHCP=ipv4")
 }
 
 func TestGenerateSystemdNetworkConfig_V2Static(t *testing.T) {
@@ -232,7 +232,7 @@ func TestGenerateSystemdNetworkConfig_V2Static(t *testing.T) {
 	assertFileContains(t, networkFile, "MACAddress=52:54:00:ab:cd:ef")
 	assertFileContains(t, networkFile, "Address=192.0.2.10/24")
 	assertFileContains(t, networkFile, "Gateway=192.0.2.1")
-	assertFileNotContains(t, networkFile, "DHCP=yes")
+	assertFileNotContains(t, networkFile, "DHCP=ipv4")
 
 	linkFile := filepath.Join(dir, "10-cloud-init-eth0.link")
 	assertFileContains(t, linkFile, "MACAddress=52:54:00:ab:cd:ef")
@@ -262,7 +262,7 @@ func TestGenerateSystemdNetworkConfig_V2DHCP(t *testing.T) {
 	}
 
 	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
-	assertFileContains(t, networkFile, "DHCP=yes")
+	assertFileContains(t, networkFile, "DHCP=ipv4")
 	assertFileNotContains(t, networkFile, "\nAddress=")
 }
 
@@ -328,7 +328,7 @@ func TestGenerateSystemdNetworkConfig_V1MultiNIC(t *testing.T) {
 	// eth0 — DHCP
 	eth0Net := filepath.Join(dir, "10-cloud-init-eth0.network")
 	assertFileContains(t, eth0Net, "MACAddress=52:54:00:11:22:33")
-	assertFileContains(t, eth0Net, "DHCP=yes")
+	assertFileContains(t, eth0Net, "DHCP=ipv4")
 	assertFileNotContains(t, eth0Net, "\nAddress=")
 	assertFileContains(t, filepath.Join(dir, "10-cloud-init-eth0.link"), "Name=eth0")
 
@@ -337,7 +337,7 @@ func TestGenerateSystemdNetworkConfig_V1MultiNIC(t *testing.T) {
 	assertFileContains(t, eth1Net, "MACAddress=52:54:00:44:55:66")
 	assertFileContains(t, eth1Net, "Address=198.51.100.10/24")
 	assertFileContains(t, eth1Net, "Gateway=198.51.100.1")
-	assertFileNotContains(t, eth1Net, "DHCP=yes")
+	assertFileNotContains(t, eth1Net, "DHCP=ipv4")
 	assertFileContains(t, filepath.Join(dir, "10-cloud-init-eth1.link"), "Name=eth1")
 
 	// shared nameserver
