@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"text/template"
@@ -105,17 +104,19 @@ func InstallService() error {
 		return fmt.Errorf("failed to write service file: %v", err)
 	}
 
-	slog.Info("installed systemd service", "path", servicePath)
+	fmt.Printf("Installed service file: %s\n", servicePath)
 
 	cmd := exec.Command("systemctl", "enable", ServiceName+".service")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		slog.Warn("could not enable service automatically, enable manually",
-			"command", "systemctl enable "+ServiceName+".service",
-			"error", string(out))
+		fmt.Printf("Warning: could not enable service automatically.\n")
+		fmt.Printf("Enable it manually with: systemctl enable %s.service\n", ServiceName)
+		if len(out) > 0 {
+			fmt.Printf("systemctl output: %s\n", out)
+		}
 		return nil
 	}
 
-	slog.Info("installed and enabled service", "service", ServiceName)
+	fmt.Printf("Enabled %s.service\n", ServiceName)
 	return nil
 }
 
@@ -125,7 +126,7 @@ func CheckPrograms() error {
 		if err != nil {
 			return fmt.Errorf("required program %s is not installed", program)
 		}
-		slog.Info("program available", "program", program, "path", path)
+		fmt.Printf("  %-12s %s\n", program, path)
 	}
 	return nil
 }
@@ -135,7 +136,7 @@ func CheckDirectories() error {
 		if _, err := os.Stat(dir); os.IsNotExist(err) {
 			return fmt.Errorf("required directory %s does not exist", dir)
 		}
-		slog.Info("directory exists", "dir", dir)
+		fmt.Printf("  %s\n", dir)
 	}
 	return nil
 }

@@ -92,16 +92,18 @@ Options:
 	}
 
 	if *installFlag {
+		fmt.Println("Checking required programs:")
 		if err := service.CheckPrograms(); err != nil {
-			slog.Error("failed to check required programs", "error", err)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+		fmt.Println("Checking required directories:")
 		if err := service.CheckDirectories(); err != nil {
-			slog.Error("failed to check required directories", "error", err)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 		if err := service.InstallService(); err != nil {
-			slog.Error("failed to install systemd service", "error", err)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 		return
