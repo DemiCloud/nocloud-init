@@ -185,6 +185,44 @@ Id={{.ID}}
 const networkVLANMemberTemplate = `VLAN={{.VLANName}}
 `
 
+const netdevBondTemplate = `[NetDev]
+Name={{.Name}}
+Kind=bond
+{{- if .Mode}}
+
+[Bond]
+Mode={{.Mode}}
+{{- end}}
+{{- if .LACPRate}}
+LACPTransmitRate={{.LACPRate}}
+{{- end}}
+{{- if .MIIMonitorInterval}}
+MIIMonitorSec={{.MIIMonitorInterval}}
+{{- end}}
+{{- if .MinLinks}}
+MinLinks={{.MinLinks}}
+{{- end}}
+{{- if .TransmitHashPolicy}}
+TransmitHashPolicy={{.TransmitHashPolicy}}
+{{- end}}
+{{- if .ARPInterval}}
+ARPIntervalSec={{.ARPInterval}}
+{{- end}}
+{{- if .UpDelay}}
+UpDelaySec={{.UpDelay}}
+{{- end}}
+{{- if .DownDelay}}
+DownDelaySec={{.DownDelay}}
+{{- end}}
+`
+
+const networkBondMemberTemplate = `[Match]
+Name={{.MemberName}}
+
+[Network]
+Bond={{.BondName}}
+`
+
 func netmaskToCIDR(netmask string) (int, error) {
 	ip := net.ParseIP(netmask)
 	if ip == nil {
@@ -422,6 +460,14 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 	if err != nil {
 		return fmt.Errorf("failed to parse netdev VLAN template: %v", err)
 	}
+	netdevBondTmpl, err := template.New("netdevBond").Parse(netdevBondTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse netdev bond template: %v", err)
+	}
+	bondMemberTmpl, err := template.New("bondMember").Parse(networkBondMemberTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse bond member template: %v", err)
+	}
 
 	var nameservers []string
 	var searchDomains []string
@@ -613,6 +659,122 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 
 			nameservers = append(nameservers, v.Nameservers.Addresses...)
 			searchDomains = append(searchDomains, v.Nameservers.Search...)
+		}
+	}
+
+	// Generate .netdev and .network files for each bond.
+	if len(config.Bonds) > 0 {
+		bondNames := make([]string, 0, len(config.Bonds))
+		for name := range config.Bonds {
+			bondNames = append(bondNames, name)
+		}
+		sort.Strings(bondNames)
+
+		for _, bondName := range bondNames {
+			b := config.Bonds[bondName]
+			if !isValidInterfaceName(bondName) {
+				return fmt.Errorf("invalid bond interface name %q", bondName)
+			}
+			if len(b.Interfaces) == 0 {
+				return fmt.Errorf("bond %q: interfaces list must not be empty", bondName)
+			}
+
+			// .netdev file
+			netdevPath := filepath.Join(networkDir, "10-cloud-init-"+bondName+".netdev")
+			netdevData := struct {
+				Name               string
+				Mode               string
+				LACPRate           string
+				MIIMonitorInterval string
+				MinLinks           int
+				TransmitHashPolicy string
+				ARPInterval        string
+				UpDelay            string
+				DownDelay          string
+			}{
+				Name:               bondName,
+				Mode:               b.Parameters.Mode,
+				LACPRate:           b.Parameters.LACPRate,
+				MIIMonitorInterval: b.Parameters.MIIMonitorInterval,
+				MinLinks:           b.Parameters.MinLinks,
+				TransmitHashPolicy: b.Parameters.TransmitHashPolicy,
+				ARPInterval:        b.Parameters.ARPInterval,
+				UpDelay:            b.Parameters.UpDelay,
+				DownDelay:          b.Parameters.DownDelay,
+			}
+			if err := writeNetworkFile(netdevPath, netdevBondTmpl, netdevData); err != nil {
+				return fmt.Errorf("failed to write netdev for bond %s: %v", bondName, err)
+			}
+			slog.Info("generated bond netdev", "bond", bondName, "path", netdevPath)
+
+			// .network file for the bond interface itself
+			var bondAddresses []string
+			if !b.DHCP4 && !b.DHCP6 {
+				for _, addr := range b.Addresses {
+					ip, prefix, parseErr := parseCIDRAddress(addr)
+					if parseErr != nil {
+						return fmt.Errorf("bond %s: %v", bondName, parseErr)
+					}
+					bondAddresses = append(bondAddresses, fmt.Sprintf("%s/%d", ip, prefix))
+				}
+			}
+			if b.Gateway4 != "" && !isValidIPAddress(b.Gateway4) {
+				return fmt.Errorf("bond %s: invalid gateway4 %q", bondName, b.Gateway4)
+			}
+			if b.Gateway6 != "" && !isValidIPAddress(b.Gateway6) {
+				return fmt.Errorf("bond %s: invalid gateway6 %q", bondName, b.Gateway6)
+			}
+
+			bondNetworkPath := filepath.Join(networkDir, "10-cloud-init-"+bondName+".network")
+			bondNetworkData := struct {
+				Addresses  []string
+				MacAddress string
+				Name       string
+				Gateway    string
+				Gateway6   string
+				DHCP4      bool
+				DHCP6      bool
+				Optional   bool
+				MTU        int
+				VLANs      []string
+			}{
+				Addresses: bondAddresses,
+				Name:      bondName,
+				Gateway:   b.Gateway4,
+				Gateway6:  b.Gateway6,
+				DHCP4:     b.DHCP4,
+				DHCP6:     b.DHCP6,
+				Optional:  b.Optional,
+				MTU:       b.MTU,
+			}
+			if err := writeNetworkFile(bondNetworkPath, networkTmpl, bondNetworkData); err != nil {
+				return fmt.Errorf("failed to write network config for bond %s: %v", bondName, err)
+			}
+			slog.Info("generated bond network config", "bond", bondName, "path", bondNetworkPath)
+
+			// .network file for each bond member interface
+			for _, memberKey := range b.Interfaces {
+				if !isValidInterfaceName(memberKey) {
+					return fmt.Errorf("bond %q: invalid member interface name %q", bondName, memberKey)
+				}
+				// Resolve the actual interface name (set-name or key)
+				memberName := memberKey
+				if eth, ok := config.Ethernets[memberKey]; ok && eth.SetName != "" {
+					memberName = eth.SetName
+				}
+				memberPath := filepath.Join(networkDir, "10-cloud-init-"+memberName+"-bond.network")
+				memberData := struct {
+					MemberName string
+					BondName   string
+				}{MemberName: memberName, BondName: bondName}
+				if err := writeNetworkFile(memberPath, bondMemberTmpl, memberData); err != nil {
+					return fmt.Errorf("bond %s: failed to write member network config for %s: %v", bondName, memberName, err)
+				}
+				slog.Info("generated bond member network config", "member", memberName, "bond", bondName, "path", memberPath)
+			}
+
+			nameservers = append(nameservers, b.Nameservers.Addresses...)
+			searchDomains = append(searchDomains, b.Nameservers.Search...)
 		}
 	}
 

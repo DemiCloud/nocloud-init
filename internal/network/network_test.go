@@ -1612,3 +1612,87 @@ func TestParseNetworkConfigV2VLAN(t *testing.T) {
 		t.Errorf("vlan10.DHCP4 = false, want true")
 	}
 }
+
+func TestGenerateV2NetworkConfigBond(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {},
+			"eth1": {},
+		},
+		Bonds: map[string]types.NetworkConfigV2Bond{
+			"bond0": {
+				Interfaces: []string{"eth0", "eth1"},
+				NetworkConfigV2Ethernet: types.NetworkConfigV2Ethernet{DHCP4: true},
+				Parameters: types.NetworkConfigV2BondParameters{
+					Mode:               "active-backup",
+					MIIMonitorInterval: "100ms",
+				},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	// bond0 .netdev
+	bondNetdev := filepath.Join(dir, "10-cloud-init-bond0.netdev")
+	assertFileContains(t, bondNetdev, "Kind=bond")
+	assertFileContains(t, bondNetdev, "Mode=active-backup")
+	assertFileContains(t, bondNetdev, "MIIMonitorSec=100ms")
+
+	// bond0 .network (DHCP)
+	bondNet := filepath.Join(dir, "10-cloud-init-bond0.network")
+	assertFileContains(t, bondNet, "DHCP=ipv4")
+
+	// member .network files
+	for _, member := range []string{"eth0", "eth1"} {
+		memberNet := filepath.Join(dir, "10-cloud-init-"+member+"-bond.network")
+		assertFileContains(t, memberNet, "Bond=bond0")
+		assertFileContains(t, memberNet, "Name="+member)
+	}
+}
+
+func TestGenerateV2NetworkConfigBondNoInterfaces(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Bonds: map[string]types.NetworkConfigV2Bond{
+			"bond0": {Interfaces: []string{}, NetworkConfigV2Ethernet: types.NetworkConfigV2Ethernet{DHCP4: true}},
+		},
+	}
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err == nil {
+		t.Fatal("expected error for bond with no interfaces, got nil")
+	}
+}
+
+func TestParseNetworkConfigV2Bond(t *testing.T) {
+	data, err := os.ReadFile("../types/testdata/nocloud-network-v2-bond.yaml")
+	if err != nil {
+		t.Fatalf("failed to read testdata: %v", err)
+	}
+	var cfg types.NetworkConfig
+	if err := types.UnmarshalNetworkConfig(data, &cfg, false); err != nil {
+		t.Fatalf("UnmarshalNetworkConfig() error = %v", err)
+	}
+	if len(cfg.Bonds) != 1 {
+		t.Fatalf("len(Bonds) = %d, want 1", len(cfg.Bonds))
+	}
+	b, ok := cfg.Bonds["bond0"]
+	if !ok {
+		t.Fatal("bond0 not found")
+	}
+	if len(b.Interfaces) != 2 {
+		t.Errorf("bond0.Interfaces = %v, want [eth0 eth1]", b.Interfaces)
+	}
+	if !b.DHCP4 {
+		t.Errorf("bond0.DHCP4 = false, want true")
+	}
+	if b.Parameters.Mode != "active-backup" {
+		t.Errorf("bond0.Parameters.Mode = %q, want %q", b.Parameters.Mode, "active-backup")
+	}
+}

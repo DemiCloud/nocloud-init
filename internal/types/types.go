@@ -314,6 +314,7 @@ type NetworkConfig struct {
 	Config    []NetworkConfigV1Entry            `yaml:"config" json:"config"`              // v1
 	Ethernets map[string]NetworkConfigV2Ethernet `yaml:"ethernets" json:"ethernets"` // v2
 	VLANs     map[string]NetworkConfigV2VLAN    `yaml:"vlans" json:"vlans"`         // v2
+	Bonds     map[string]NetworkConfigV2Bond    `yaml:"bonds" json:"bonds"`         // v2
 }
 
 // NetworkConfigV2VLAN describes a VLAN interface in a v2 network-config.
@@ -323,6 +324,30 @@ type NetworkConfig struct {
 type NetworkConfigV2VLAN struct {
 	ID   int    `yaml:"id" json:"id"`
 	Link string `yaml:"link" json:"link"`
+	NetworkConfigV2Ethernet `yaml:",inline" json:",inline"`
+}
+
+// NetworkConfigV2BondParameters holds optional bonding mode parameters.
+// Fields map directly to the [Bond] section of a systemd-networkd .netdev file.
+type NetworkConfigV2BondParameters struct {
+	Mode               string `yaml:"mode" json:"mode"`
+	LACPRate           string `yaml:"lacp-rate" json:"lacp-rate"`
+	MIIMonitorInterval string `yaml:"mii-monitor-interval" json:"mii-monitor-interval"`
+	MinLinks           int    `yaml:"min-links" json:"min-links"`
+	TransmitHashPolicy string `yaml:"transmit-hash-policy" json:"transmit-hash-policy"`
+	ARPInterval        string `yaml:"arp-interval" json:"arp-interval"`
+	UpDelay            string `yaml:"up-delay" json:"up-delay"`
+	DownDelay          string `yaml:"down-delay" json:"down-delay"`
+}
+
+// NetworkConfigV2Bond describes a bond interface in a v2 network-config.
+// Interfaces lists the IDs of the ethernet entries that form the bond members.
+// Parameters contains optional bonding mode configuration.
+// All common per-device properties (addresses, dhcp4, dhcp6, etc.) are
+// inherited from NetworkConfigV2Ethernet via embedding.
+type NetworkConfigV2Bond struct {
+	Interfaces []string                       `yaml:"interfaces" json:"interfaces"`
+	Parameters NetworkConfigV2BondParameters  `yaml:"parameters" json:"parameters"`
 	NetworkConfigV2Ethernet `yaml:",inline" json:",inline"`
 }
 

@@ -1,0 +1,17 @@
+version: 2
+ethernets:
+  eth0:
+    match:
+      macaddress: "52:54:00:ab:cd:ef"
+    set-name: eth0
+  eth1:
+    match:
+      macaddress: "52:54:00:ab:cd:00"
+    set-name: eth1
+bonds:
+  bond0:
+    interfaces: [eth0, eth1]
+    dhcp4: true
+    parameters:
+      mode: active-backup
+      mii-monitor-interval: 100ms
