@@ -206,8 +206,8 @@ func CheckAndGenerateSSHKeys() error {
 	// key type (e.g. RSA) as a sentinel would miss newly-supported types
 	// (e.g. Ed25519) that could be absent after an upgrade.
 	cmd := exec.Command("ssh-keygen", "-A")
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to generate SSH host keys: %v", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to generate SSH host keys: %v: %s", err, out)
 	}
 	slog.Info("ensured SSH host keys are present")
 	return nil
