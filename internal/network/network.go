@@ -138,6 +138,11 @@ Address={{.Address}}/{{.CIDR}}
 Gateway={{.Gateway}}
 {{- end }}
 {{- end }}
+{{- if .MTU }}
+
+[Link]
+MTUBytes={{.MTU}}
+{{- end }}
 `
 
 const linkConfigTemplate = `[Match]
@@ -321,6 +326,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Name       string
 			Gateway    string
 			DHCP       bool
+			MTU        int
 		}{
 			Address:    subnet.Address,
 			CIDR:       cidr,
@@ -433,6 +439,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Name       string
 			Gateway    string
 			DHCP       bool
+			MTU        int
 		}{
 			Address:    address,
 			CIDR:       cidr,
@@ -440,6 +447,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Name:       ifaceName,
 			Gateway:    eth.Gateway4,
 			DHCP:       eth.DHCP4,
+			MTU:        eth.MTU,
 		}
 		if err := writeNetworkFile(networkFilePath, networkTmpl, networkData); err != nil {
 			return fmt.Errorf("failed to write network config for %s: %v", ifaceName, err)

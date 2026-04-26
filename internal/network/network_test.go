@@ -289,6 +289,54 @@ func TestGenerateSystemdNetworkConfig_V2SetNameFallback(t *testing.T) {
 	assertFileContains(t, filepath.Join(dir, "10-cloud-init-enp3s0.link"), "Name=enp3s0")
 }
 
+func TestGenerateSystemdNetworkConfig_V2MTU(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP4:   true,
+				MTU:     9000,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "[Link]")
+	assertFileContains(t, networkFile, "MTUBytes=9000")
+}
+
+func TestGenerateSystemdNetworkConfig_V2NoMTU(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP4:   true,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileNotContains(t, networkFile, "MTUBytes=")
+}
+
 // TestGenerateSystemdNetworkConfig_V1MultiNIC verifies generation for a
 // Proxmox-style config with two physical interfaces (eth0 DHCP, eth1 static)
 // plus a shared nameserver entry.
