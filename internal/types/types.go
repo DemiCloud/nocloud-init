@@ -63,6 +63,7 @@ type NetworkConfigV2Ethernet struct {
 	Addresses   []string `yaml:"addresses" json:"addresses"`
 	Gateway4    string   `yaml:"gateway4" json:"gateway4"`
 	DHCP4       bool     `yaml:"dhcp4" json:"dhcp4"`
+	Optional    bool     `yaml:"optional" json:"optional"`
 	MTU         int      `yaml:"mtu" json:"mtu"`
 	Nameservers struct {
 		Addresses []string `yaml:"addresses" json:"addresses"`

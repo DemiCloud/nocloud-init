@@ -138,6 +138,9 @@ Address={{.Address}}/{{.CIDR}}
 Gateway={{.Gateway}}
 {{- end }}
 {{- end }}
+{{- if .Optional }}
+RequiredForOnline=no
+{{- end }}
 {{- if .MTU }}
 
 [Link]
@@ -326,6 +329,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Name       string
 			Gateway    string
 			DHCP       bool
+			Optional   bool
 			MTU        int
 		}{
 			Address:    subnet.Address,
@@ -439,6 +443,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Name       string
 			Gateway    string
 			DHCP       bool
+			Optional   bool
 			MTU        int
 		}{
 			Address:    address,
@@ -447,6 +452,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Name:       ifaceName,
 			Gateway:    eth.Gateway4,
 			DHCP:       eth.DHCP4,
+			Optional:   eth.Optional,
 			MTU:        eth.MTU,
 		}
 		if err := writeNetworkFile(networkFilePath, networkTmpl, networkData); err != nil {
