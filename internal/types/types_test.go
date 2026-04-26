@@ -717,3 +717,62 @@ func TestUnmarshalUserDataRuncmdJSON(t *testing.T) {
 		t.Errorf("Runcmd[1].Args = %v, want [touch /tmp/x]", ud.Runcmd[1].Args)
 	}
 }
+
+func TestUnmarshalGroupsString(t *testing.T) {
+	input := "groups: sudo, docker\n"
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if len(ud.Groups) != 2 {
+		t.Fatalf("len(Groups) = %d, want 2", len(ud.Groups))
+	}
+	if ud.Groups[0].Name != "sudo" {
+		t.Errorf("Groups[0].Name = %q, want %q", ud.Groups[0].Name, "sudo")
+	}
+	if ud.Groups[1].Name != "docker" {
+		t.Errorf("Groups[1].Name = %q, want %q", ud.Groups[1].Name, "docker")
+	}
+}
+
+func TestUnmarshalGroupsList(t *testing.T) {
+	input := `#cloud-config
+groups:
+  - admins
+  - developers: alice
+  - ops: [bob, carol]
+`
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if len(ud.Groups) != 3 {
+		t.Fatalf("len(Groups) = %d, want 3", len(ud.Groups))
+	}
+	if ud.Groups[0].Name != "admins" || len(ud.Groups[0].Members) != 0 {
+		t.Errorf("Groups[0] = %+v, want {Name:admins Members:[]}", ud.Groups[0])
+	}
+	if ud.Groups[1].Name != "developers" || len(ud.Groups[1].Members) != 1 || ud.Groups[1].Members[0] != "alice" {
+		t.Errorf("Groups[1] = %+v, want {Name:developers Members:[alice]}", ud.Groups[1])
+	}
+	if ud.Groups[2].Name != "ops" || len(ud.Groups[2].Members) != 2 {
+		t.Errorf("Groups[2] = %+v, want {Name:ops Members:[bob carol]}", ud.Groups[2])
+	}
+}
+
+func TestUnmarshalGroupsJSON(t *testing.T) {
+	input := `{"groups":["wheel",{"devs":["alice","bob"]}]}`
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if len(ud.Groups) != 2 {
+		t.Fatalf("len(Groups) = %d, want 2", len(ud.Groups))
+	}
+	if ud.Groups[0].Name != "wheel" {
+		t.Errorf("Groups[0].Name = %q, want %q", ud.Groups[0].Name, "wheel")
+	}
+	if ud.Groups[1].Name != "devs" || len(ud.Groups[1].Members) != 2 {
+		t.Errorf("Groups[1] = %+v, want {Name:devs Members:[alice bob]}", ud.Groups[1])
+	}
+}

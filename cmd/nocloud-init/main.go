@@ -239,6 +239,13 @@ Options:
 		slog.Info("updated hostname", "hostname", hostname)
 	}
 
+	if len(userData.Groups) > 0 {
+		if err := system.CreateGroups(userData.Groups); err != nil {
+			slog.Error("failed to create groups", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	if userData.User != "" && userData.Password != "" {
 		if !system.IsValidHashedPassword(userData.Password) {
 			slog.Error("password must be a pre-hashed credential (e.g. $6$...); plaintext passwords are not supported")

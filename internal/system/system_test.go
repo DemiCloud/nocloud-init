@@ -879,3 +879,59 @@ func TestRunCmdStopsOnFirstFailure(t *testing.T) {
 		t.Error("second command ran despite first failure")
 	}
 }
+
+func TestIsValidLinuxName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"sudo", true},
+		{"docker", true},
+		{"_internal", true},
+		{"group-name", true},
+		{"group.name", true},
+		{"Group123", true},
+		// too short / too long
+		{"", false},
+		{strings.Repeat("a", 33), false},
+		// starts with digit or hyphen
+		{"1group", false},
+		{"-group", false},
+		// contains invalid character
+		{"my group", false},
+		{"group@name", false},
+		{"group/name", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isValidLinuxName(tt.input)
+			if got != tt.want {
+				t.Errorf("isValidLinuxName(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateGroupsInvalidName(t *testing.T) {
+	groups := types.GroupList{{Name: "bad name"}}
+	if err := CreateGroups(groups); err == nil {
+		t.Fatal("CreateGroups() expected error for invalid group name, got nil")
+	}
+}
+
+func TestCreateGroupsInvalidMember(t *testing.T) {
+	// groupadd --force will succeed for a real group name; but we can check
+	// the member validation by mocking PATH so groupadd is a no-op.
+	// Use a temp dir with a fake groupadd that exits 0.
+	bin := t.TempDir()
+	fakeGroupadd := filepath.Join(bin, "groupadd")
+	if err := os.WriteFile(fakeGroupadd, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("writing fake groupadd: %v", err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	groups := types.GroupList{{Name: "mygroup", Members: []string{"bad user"}}}
+	if err := CreateGroups(groups); err == nil {
+		t.Fatal("CreateGroups() expected error for invalid member name, got nil")
+	}
+}

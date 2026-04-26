@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -48,6 +49,105 @@ func (r *RuncmdItem) UnmarshalJSON(data []byte) error {
 		return fmt.Errorf("runcmd item must be a string or list of strings: %w", err)
 	}
 	r.Args = args
+	return nil
+}
+
+// GroupEntry describes a single group to create, with an optional list of
+// existing users to add as members.
+type GroupEntry struct {
+	Name    string
+	Members []string
+}
+
+// GroupList is the parsed form of the cloud-config groups key.
+// The key accepts:
+//   - a comma-separated string:  "sudo, docker"
+//   - a sequence where each item is either a plain group name or a mapping
+//     of {groupname: member} or {groupname: [member1, member2]}
+type GroupList []GroupEntry
+
+func (g *GroupList) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		for _, name := range strings.Split(value.Value, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				*g = append(*g, GroupEntry{Name: name})
+			}
+		}
+		return nil
+	case yaml.SequenceNode:
+		for _, item := range value.Content {
+			switch item.Kind {
+			case yaml.ScalarNode:
+				*g = append(*g, GroupEntry{Name: item.Value})
+			case yaml.MappingNode:
+				if len(item.Content) != 2 {
+					return fmt.Errorf("groups mapping entry must have exactly one key")
+				}
+				name := item.Content[0].Value
+				valNode := item.Content[1]
+				var members []string
+				switch valNode.Kind {
+				case yaml.ScalarNode:
+					if valNode.Value != "" {
+						members = []string{valNode.Value}
+					}
+				case yaml.SequenceNode:
+					if err := valNode.Decode(&members); err != nil {
+						return fmt.Errorf("groups %q members: %w", name, err)
+					}
+				default:
+					return fmt.Errorf("groups %q members must be a string or list", name)
+				}
+				*g = append(*g, GroupEntry{Name: name, Members: members})
+			default:
+				return fmt.Errorf("groups list item must be a string or mapping")
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("groups must be a string or list")
+	}
+}
+
+func (g *GroupList) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		for _, name := range strings.Split(s, ",") {
+			if name = strings.TrimSpace(name); name != "" {
+				*g = append(*g, GroupEntry{Name: name})
+			}
+		}
+		return nil
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("groups must be a string or array: %w", err)
+	}
+	for _, item := range raw {
+		var name string
+		if err := json.Unmarshal(item, &name); err == nil {
+			*g = append(*g, GroupEntry{Name: name})
+			continue
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(item, &m); err != nil {
+			return fmt.Errorf("groups item must be a string or object: %w", err)
+		}
+		for gname, membersRaw := range m {
+			entry := GroupEntry{Name: gname}
+			var ms string
+			var ml []string
+			if err := json.Unmarshal(membersRaw, &ms); err == nil {
+				if ms != "" {
+					entry.Members = []string{ms}
+				}
+			} else if err := json.Unmarshal(membersRaw, &ml); err == nil {
+				entry.Members = ml
+			}
+			*g = append(*g, entry)
+		}
+	}
 	return nil
 }
 
@@ -95,6 +195,8 @@ type UserData struct {
 	// Runcmd lists commands to run after all other configuration is applied.
 	// Each item is either a shell string (run via sh -c) or a list of exec args.
 	Runcmd []RuncmdItem `yaml:"runcmd" json:"runcmd"`
+	// Groups lists groups to create on the system, with optional members.
+	Groups GroupList `yaml:"groups" json:"groups"`
 }
 
 // NetworkConfig supports both NoCloud network-config v1 and v2 formats.

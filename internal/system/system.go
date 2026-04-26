@@ -526,3 +526,61 @@ func cmdLabel(item types.RuncmdItem) string {
 	}
 	return strings.Join(item.Args, " ")
 }
+
+// isValidLinuxName reports whether s is a valid Linux user or group name.
+// Matches useradd(8) / groupadd(8) conventions: 1–32 characters, starts with
+// a letter or underscore, followed by letters, digits, hyphens, underscores,
+// or dots.
+func isValidLinuxName(s string) bool {
+	if len(s) == 0 || len(s) > 32 {
+		return false
+	}
+	for i, c := range s {
+		if i == 0 {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
+				return false
+			}
+		} else {
+			if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// CreateGroups creates each group listed in the groups cloud-config key.
+// groupadd --force is used so an already-existing group is not an error.
+// Members are added via usermod -aG after the group is created.
+func CreateGroups(groups types.GroupList) error {
+	for _, g := range groups {
+		if err := createOneGroup(g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func createOneGroup(g types.GroupEntry) error {
+	if !isValidLinuxName(g.Name) {
+		return fmt.Errorf("invalid group name %q", g.Name)
+	}
+	cmd := exec.Command("groupadd", "--force", g.Name)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("groupadd %q: %w: %s", g.Name, err, strings.TrimSpace(string(out)))
+	}
+	slog.Info("created group", "group", g.Name)
+
+	for _, user := range g.Members {
+		if !isValidLinuxName(user) {
+			return fmt.Errorf("invalid member name %q for group %q", user, g.Name)
+		}
+		cmd := exec.Command("usermod", "-aG", g.Name, user)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("usermod -aG %q %q: %w: %s", g.Name, user, err, strings.TrimSpace(string(out)))
+		}
+		slog.Info("added user to group", "user", user, "group", g.Name)
+	}
+	return nil
+}
