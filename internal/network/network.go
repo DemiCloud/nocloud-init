@@ -130,24 +130,33 @@ Name={{.Name}}
 {{- end}}
 
 [Network]
-{{- if .DHCP }}
+{{- if and .DHCP4 .DHCP6}}
+DHCP=yes
+{{- else if .DHCP4}}
 DHCP=ipv4
-{{- else }}
+{{- else if .DHCP6}}
+DHCP=ipv6
+{{- else}}
 {{- range .Addresses}}
 Address={{.}}
 {{- end}}
-{{- if .Gateway }}
+{{- if .Gateway}}
 Gateway={{.Gateway}}
-{{- end }}
-{{- end }}
-{{- if .Optional }}
+{{- end}}
+{{- end}}
+{{- if .Optional}}
 RequiredForOnline=no
-{{- end }}
-{{- if .MTU }}
+{{- end}}
+{{- if .Gateway6}}
+
+[Route]
+Gateway={{.Gateway6}}
+{{- end}}
+{{- if .MTU}}
 
 [Link]
 MTUBytes={{.MTU}}
-{{- end }}
+{{- end}}
 `
 
 const linkConfigTemplate = `[Match]
@@ -332,7 +341,9 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			MacAddress string
 			Name       string
 			Gateway    string
-			DHCP       bool
+			Gateway6   string
+			DHCP4      bool
+			DHCP6      bool
 			Optional   bool
 			MTU        int
 		}{
@@ -340,7 +351,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			MacAddress: entry.MacAddress,
 			Name:       entry.Name,
 			Gateway:    gateway,
-			DHCP:       useDHCP,
+			DHCP4:      useDHCP,
 		}
 		if err := writeNetworkFile(networkFilePath, networkTmpl, networkData); err != nil {
 			return fmt.Errorf("failed to write network config for %s: %v", entry.Name, err)
@@ -420,9 +431,9 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		}
 
 		var addresses []string
-		if !eth.DHCP4 {
+		if !eth.DHCP4 && !eth.DHCP6 {
 			if len(eth.Addresses) == 0 {
-				return fmt.Errorf("interface %s: no addresses and dhcp4 not set", ifaceName)
+				return fmt.Errorf("interface %s: no addresses and dhcp4/dhcp6 not set", ifaceName)
 			}
 			for _, addr := range eth.Addresses {
 				ip, prefix, parseErr := parseCIDRAddress(addr)
@@ -436,6 +447,9 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if eth.Gateway4 != "" && !isValidIPAddress(eth.Gateway4) {
 			return fmt.Errorf("interface %s: invalid gateway4 %q", ifaceName, eth.Gateway4)
 		}
+		if eth.Gateway6 != "" && !isValidIPAddress(eth.Gateway6) {
+			return fmt.Errorf("interface %s: invalid gateway6 %q", ifaceName, eth.Gateway6)
+		}
 
 		networkFilePath := filepath.Join(networkDir, "10-cloud-init-"+ifaceName+".network")
 		networkData := struct {
@@ -443,7 +457,9 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			MacAddress string
 			Name       string
 			Gateway    string
-			DHCP       bool
+			Gateway6   string
+			DHCP4      bool
+			DHCP6      bool
 			Optional   bool
 			MTU        int
 		}{
@@ -451,7 +467,9 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			MacAddress: eth.Match.MACAddress,
 			Name:       ifaceName,
 			Gateway:    eth.Gateway4,
-			DHCP:       eth.DHCP4,
+			Gateway6:   eth.Gateway6,
+			DHCP4:      eth.DHCP4,
+			DHCP6:      eth.DHCP6,
 			Optional:   eth.Optional,
 			MTU:        eth.MTU,
 		}

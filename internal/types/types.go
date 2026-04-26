@@ -58,7 +58,7 @@ type NetworkConfigV1Subnet struct {
 
 // NetworkConfigV2Ethernet is an entry in a v2 network-config ethernets map.
 // Addresses use CIDR notation (e.g. "192.168.1.10/24").
-// Set DHCP4 to true for DHCP configuration.
+// Set DHCP4 to true for DHCPv4, DHCP6 for DHCPv6, or both for dual-stack DHCP.
 type NetworkConfigV2Ethernet struct {
 	Match struct {
 		MACAddress string `yaml:"macaddress" json:"macaddress"`
@@ -66,7 +66,9 @@ type NetworkConfigV2Ethernet struct {
 	SetName     string   `yaml:"set-name" json:"set-name"`
 	Addresses   []string `yaml:"addresses" json:"addresses"`
 	Gateway4    string   `yaml:"gateway4" json:"gateway4"`
+	Gateway6    string   `yaml:"gateway6" json:"gateway6"`
 	DHCP4       bool     `yaml:"dhcp4" json:"dhcp4"`
+	DHCP6       bool     `yaml:"dhcp6" json:"dhcp6"`
 	Optional    bool     `yaml:"optional" json:"optional"`
 	MTU         int      `yaml:"mtu" json:"mtu"`
 	Nameservers struct {

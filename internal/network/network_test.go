@@ -1344,6 +1344,142 @@ func TestGenerateSystemdNetworkConfig_V1MultipleSubnets(t *testing.T) {
 	assertFileNotContains(t, networkFile, "DHCP=ipv4")
 }
 
+// TestGenerateSystemdNetworkConfig_V2DHCP6Only verifies that dhcp6=true with
+// dhcp4=false emits DHCP=ipv6 and not DHCP=ipv4 or DHCP=yes.
+func TestGenerateSystemdNetworkConfig_V2DHCP6Only(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP6:   true,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "DHCP=ipv6")
+	assertFileNotContains(t, networkFile, "DHCP=ipv4")
+	assertFileNotContains(t, networkFile, "DHCP=yes")
+	assertFileNotContains(t, networkFile, "\nAddress=")
+}
+
+// TestGenerateSystemdNetworkConfig_V2DHCPDualStack verifies that dhcp4=true +
+// dhcp6=true emits DHCP=yes and not DHCP=ipv4 or DHCP=ipv6.
+func TestGenerateSystemdNetworkConfig_V2DHCPDualStack(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP4:   true,
+				DHCP6:   true,
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "DHCP=yes")
+	assertFileNotContains(t, networkFile, "DHCP=ipv4")
+	assertFileNotContains(t, networkFile, "DHCP=ipv6")
+}
+
+// TestGenerateSystemdNetworkConfig_V2Gateway6 verifies that gateway6 produces
+// a [Route] section with the IPv6 gateway address.
+func TestGenerateSystemdNetworkConfig_V2Gateway6(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:     struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName:   "eth0",
+				Addresses: []string{"192.0.2.10/24"},
+				Gateway4:  "192.0.2.1",
+				Gateway6:  "2001:db8::1",
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "[Route]")
+	assertFileContains(t, networkFile, "Gateway=2001:db8::1")
+	// IPv4 gateway must still appear in [Network].
+	assertFileContains(t, networkFile, "Gateway=192.0.2.1")
+}
+
+// TestGenerateSystemdNetworkConfig_V2NoGateway6 verifies that when gateway6 is
+// unset no [Route] section is emitted.
+func TestGenerateSystemdNetworkConfig_V2NoGateway6(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:     struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName:   "eth0",
+				Addresses: []string{"192.0.2.10/24"},
+				Gateway4:  "192.0.2.1",
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileNotContains(t, networkFile, "[Route]")
+}
+
+// TestGenerateSystemdNetworkConfig_V2InvalidGateway6 verifies that a
+// non-IP gateway6 value is rejected before any files are written.
+func TestGenerateSystemdNetworkConfig_V2InvalidGateway6(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:     struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName:   "eth0",
+				Addresses: []string{"192.0.2.10/24"},
+				Gateway6:  "not-an-ip",
+			},
+		},
+	}
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid gateway6, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid gateway6") {
+		t.Errorf("error %q should mention invalid gateway6", err.Error())
+	}
+}
+
 func assertFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	b, err := os.ReadFile(path)
