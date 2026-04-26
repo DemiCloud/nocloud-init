@@ -1,6 +1,9 @@
 package system
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -467,5 +470,344 @@ func TestWriteAuthorizedKeysAt_Permissions(t *testing.T) {
 	}
 	if got := akInfo.Mode().Perm(); got != 0600 {
 		t.Errorf("authorized_keys permissions = %04o, want 0600", got)
+	}
+}
+
+func TestIsValidWritePath(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/etc/myapp/config.cfg", true},
+		{"/tmp/test.txt", true},
+		{"/var/lib/data/file.json", true},
+		{"/usr/local/bin/myscript", true},
+		// invalid
+		{"", false},
+		{"/", false},
+		{"relative/path", false},
+		{"relative", false},
+		{"./relative", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := isValidWritePath(tt.path); got != tt.want {
+				t.Errorf("isValidWritePath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDecodeWriteFileContent(t *testing.T) {
+	// Build a gzip+base64 payload for the combo encoding tests.
+	var gzBuf bytes.Buffer
+	w := gzip.NewWriter(&gzBuf)
+	_, _ = w.Write([]byte("hello gzip"))
+	_ = w.Close()
+	gzB64 := base64.StdEncoding.EncodeToString(gzBuf.Bytes())
+
+	tests := []struct {
+		name     string
+		content  string
+		encoding string
+		want     string
+		wantErr  bool
+	}{
+		{
+			name:     "empty encoding is plain text",
+			content:  "hello world",
+			encoding: "",
+			want:     "hello world",
+		},
+		{
+			name:     "text/plain explicit",
+			content:  "hello world",
+			encoding: "text/plain",
+			want:     "hello world",
+		},
+		{
+			name:     "b64 encoding",
+			content:  base64.StdEncoding.EncodeToString([]byte("hello world")),
+			encoding: "b64",
+			want:     "hello world",
+		},
+		{
+			name:     "base64 encoding",
+			content:  base64.StdEncoding.EncodeToString([]byte("hello world")),
+			encoding: "base64",
+			want:     "hello world",
+		},
+		{
+			name:     "base64 with embedded whitespace",
+			content:  "aGVs\nbG8g\nd29y\nbGQ=",
+			encoding: "b64",
+			want:     "hello world",
+		},
+		{
+			name:     "encoding name is case-insensitive",
+			content:  base64.StdEncoding.EncodeToString([]byte("hello world")),
+			encoding: "Base64",
+			want:     "hello world",
+		},
+		{
+			name:     "gz+b64 encoding",
+			content:  gzB64,
+			encoding: "gz+b64",
+			want:     "hello gzip",
+		},
+		{
+			name:     "gz+base64 encoding",
+			content:  gzB64,
+			encoding: "gz+base64",
+			want:     "hello gzip",
+		},
+		{
+			name:     "gzip+b64 encoding",
+			content:  gzB64,
+			encoding: "gzip+b64",
+			want:     "hello gzip",
+		},
+		{
+			name:     "gzip+base64 encoding",
+			content:  gzB64,
+			encoding: "gzip+base64",
+			want:     "hello gzip",
+		},
+		{
+			name:     "invalid base64 returns error",
+			content:  "not-valid-base64!!!",
+			encoding: "b64",
+			wantErr:  true,
+		},
+		{
+			name:     "unsupported encoding returns error",
+			content:  "",
+			encoding: "bz2",
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := decodeWriteFileContent(tt.content, tt.encoding)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("decodeWriteFileContent() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && string(got) != tt.want {
+				t.Errorf("got %q, want %q", string(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFilePermissions(t *testing.T) {
+	tests := []struct {
+		input   string
+		want    os.FileMode
+		wantErr bool
+	}{
+		{"", 0644, false},
+		{"0644", 0644, false},
+		{"644", 0644, false},
+		{"0755", 0755, false},
+		{"0600", 0600, false},
+		{"0777", 0777, false},
+		{"777", 0777, false},
+		{"not-octal", 0, true},
+		{"9999", 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got, err := parseFilePermissions(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseFilePermissions(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if err == nil && got != tt.want {
+				t.Errorf("parseFilePermissions(%q) = %04o, want %04o", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWriteFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		files       []types.WriteFile
+		wantContent map[string]string   // relative path → expected content
+		wantPerm    map[string]os.FileMode
+		wantErr     bool
+	}{
+		{
+			name: "plain text file",
+			files: []types.WriteFile{
+				{Path: "/config/test.txt", Content: "hello world"},
+			},
+			wantContent: map[string]string{"/config/test.txt": "hello world"},
+		},
+		{
+			name: "base64 encoded content",
+			files: []types.WriteFile{
+				{Path: "/config/test.txt", Content: base64.StdEncoding.EncodeToString([]byte("hello world")), Encoding: "b64"},
+			},
+			wantContent: map[string]string{"/config/test.txt": "hello world"},
+		},
+		{
+			name: "custom permissions",
+			files: []types.WriteFile{
+				{Path: "/config/exec.sh", Content: "#!/bin/sh\n", Permissions: "0755"},
+			},
+			wantContent: map[string]string{"/config/exec.sh": "#!/bin/sh\n"},
+			wantPerm:    map[string]os.FileMode{"/config/exec.sh": 0755},
+		},
+		{
+			name: "default permissions are 0644",
+			files: []types.WriteFile{
+				{Path: "/config/default.txt", Content: "data"},
+			},
+			wantPerm: map[string]os.FileMode{"/config/default.txt": 0644},
+		},
+		{
+			name: "creates parent directories",
+			files: []types.WriteFile{
+				{Path: "/a/b/c/deep.txt", Content: "deep"},
+			},
+			wantContent: map[string]string{"/a/b/c/deep.txt": "deep"},
+		},
+		{
+			name: "multiple files",
+			files: []types.WriteFile{
+				{Path: "/etc/a.conf", Content: "a"},
+				{Path: "/etc/b.conf", Content: "b"},
+			},
+			wantContent: map[string]string{"/etc/a.conf": "a", "/etc/b.conf": "b"},
+		},
+		{
+			name: "overwrites existing file",
+			files: []types.WriteFile{
+				{Path: "/config/existing.txt", Content: "new content"},
+			},
+			wantContent: map[string]string{"/config/existing.txt": "new content"},
+		},
+		{
+			name:    "relative path is rejected",
+			files:   []types.WriteFile{{Path: "relative/path.txt", Content: "x"}},
+			wantErr: true,
+		},
+		{
+			name:    "empty path is rejected",
+			files:   []types.WriteFile{{Path: "", Content: "x"}},
+			wantErr: true,
+		},
+		{
+			name:    "root path is rejected",
+			files:   []types.WriteFile{{Path: "/", Content: "x"}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid encoding returns error",
+			files:   []types.WriteFile{{Path: "/config/test.txt", Content: "data", Encoding: "bz2"}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid permissions return error",
+			files:   []types.WriteFile{{Path: "/config/test.txt", Content: "data", Permissions: "not-octal"}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+
+			// Rewrite absolute paths to be under the temp root so tests don't
+			// touch the real filesystem.
+			files := make([]types.WriteFile, len(tt.files))
+			copy(files, tt.files)
+			for i := range files {
+				if filepath.IsAbs(files[i].Path) {
+					files[i].Path = filepath.Join(root, files[i].Path)
+				}
+			}
+
+			// Pre-create a file for the "overwrites existing" case.
+			if tt.name == "overwrites existing file" {
+				p := filepath.Join(root, "/config/existing.txt")
+				if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				if err := os.WriteFile(p, []byte("old content"), 0644); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			}
+
+			err := WriteFiles(files)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("WriteFiles() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+
+			for rel, wantContent := range tt.wantContent {
+				p := filepath.Join(root, rel)
+				got, err := os.ReadFile(p)
+				if err != nil {
+					t.Fatalf("ReadFile(%s): %v", p, err)
+				}
+				if string(got) != wantContent {
+					t.Errorf("content of %s = %q, want %q", rel, string(got), wantContent)
+				}
+			}
+			for rel, wantMode := range tt.wantPerm {
+				p := filepath.Join(root, rel)
+				info, err := os.Stat(p)
+				if err != nil {
+					t.Fatalf("Stat(%s): %v", p, err)
+				}
+				if got := info.Mode().Perm(); got != wantMode {
+					t.Errorf("perm of %s = %04o, want %04o", rel, got, wantMode)
+				}
+			}
+		})
+	}
+}
+
+func TestWriteFilesAppend(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "data.txt")
+
+	// Write the initial file.
+	if err := os.WriteFile(p, []byte("first\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	files := []types.WriteFile{{Path: p, Content: "second\n", Append: true}}
+	if err := WriteFiles(files); err != nil {
+		t.Fatalf("WriteFiles() error = %v", err)
+	}
+
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if want := "first\nsecond\n"; string(got) != want {
+		t.Errorf("appended content = %q, want %q", string(got), want)
+	}
+}
+
+func TestWriteFilesAppendCreatesFile(t *testing.T) {
+	root := t.TempDir()
+	p := filepath.Join(root, "new.txt")
+
+	files := []types.WriteFile{{Path: p, Content: "hello\n", Append: true}}
+	if err := WriteFiles(files); err != nil {
+		t.Fatalf("WriteFiles() error = %v", err)
+	}
+
+	got, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if want := "hello\n"; string(got) != want {
+		t.Errorf("content = %q, want %q", string(got), want)
 	}
 }

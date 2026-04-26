@@ -9,6 +9,26 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// WriteFile describes a single file entry from the write_files cloud-config
+// directive.  Content is decoded according to Encoding before writing:
+//   - "" or "text/plain" — written as-is
+//   - "b64" / "base64" — base64-decoded first (whitespace is stripped)
+//   - "gz" / "gzip" — gzip-decompressed (useful for binary blobs in JSON payloads)
+//   - "gz+b64" / "gz+base64" / "gzip+b64" / "gzip+base64" — base64-decoded then gzip-decompressed
+//
+// Permissions is an octal string (e.g. "0644"); defaults to "0644".
+// Owner is "user:group" or "user"; defaults to root (no chown called).
+// If Append is true, content is appended to an existing file rather than
+// replacing it.
+type WriteFile struct {
+	Path        string `yaml:"path" json:"path"`
+	Content     string `yaml:"content" json:"content"`
+	Encoding    string `yaml:"encoding" json:"encoding"`
+	Owner       string `yaml:"owner" json:"owner"`
+	Permissions string `yaml:"permissions" json:"permissions"`
+	Append      bool   `yaml:"append" json:"append"`
+}
+
 type UserData struct {
 	Hostname       string `yaml:"hostname" json:"hostname"`
 	ManageEtcHosts bool   `yaml:"manage_etc_hosts" json:"manage_etc_hosts"`
@@ -28,6 +48,8 @@ type UserData struct {
 	// Each run replaces the nocloud-init–managed block in the user's
 	// authorized_keys file, leaving any pre-existing keys untouched.
 	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys" json:"ssh_authorized_keys"`
+	// WriteFiles lists files to create or update on the system.
+	WriteFiles []WriteFile `yaml:"write_files" json:"write_files"`
 }
 
 // NetworkConfig supports both NoCloud network-config v1 and v2 formats.

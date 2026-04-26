@@ -2,12 +2,17 @@ package system
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
 	osuser "os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/unix"
@@ -198,6 +203,189 @@ func updateHostsFileAt(hostsPath string, userData types.UserData) error {
 	}
 
 	slog.Info("updated hosts file", "path", hostsPath)
+	return nil
+}
+
+// isValidWritePath reports whether path is a safe absolute path for
+// write_files.  The path must be absolute, non-empty, not "/", and must not
+// contain null bytes.
+func isValidWritePath(path string) bool {
+	if path == "" || path == "/" {
+		return false
+	}
+	if !filepath.IsAbs(path) {
+		return false
+	}
+	if strings.ContainsRune(path, 0) {
+		return false
+	}
+	return true
+}
+
+// decodeWriteFileContent decodes content according to the encoding field of a
+// write_files entry.  Supported encodings:
+//
+//	"" / "text/plain"           — returned as-is
+//	"b64" / "base64"            — base64-decoded (whitespace stripped first)
+//	"gz" / "gzip"               — gzip-decompressed
+//	"gz+b64" / "gz+base64" / … — base64-decoded then gzip-decompressed
+func decodeWriteFileContent(content, encoding string) ([]byte, error) {
+	enc := strings.ToLower(strings.TrimSpace(encoding))
+
+	stripWS := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+				return -1
+			}
+			return r
+		}, s)
+	}
+
+	decodeB64 := func(s string) ([]byte, error) {
+		data, err := base64.StdEncoding.DecodeString(stripWS(s))
+		if err != nil {
+			return nil, fmt.Errorf("base64 decode: %w", err)
+		}
+		return data, nil
+	}
+
+	decompressGzip := func(data []byte) ([]byte, error) {
+		r, err := gzip.NewReader(bytes.NewReader(data))
+		if err != nil {
+			return nil, fmt.Errorf("gzip reader: %w", err)
+		}
+		defer r.Close()
+		out, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("gzip decompress: %w", err)
+		}
+		return out, nil
+	}
+
+	switch enc {
+	case "", "text/plain":
+		return []byte(content), nil
+	case "b64", "base64":
+		return decodeB64(content)
+	case "gz", "gzip":
+		return decompressGzip([]byte(content))
+	case "gz+b64", "gz+base64", "gzip+b64", "gzip+base64":
+		decoded, err := decodeB64(content)
+		if err != nil {
+			return nil, err
+		}
+		return decompressGzip(decoded)
+	default:
+		return nil, fmt.Errorf("unsupported encoding %q: supported values are empty (plain text), \"b64\", \"base64\", \"gz\", \"gzip\", \"gz+b64\", \"gz+base64\"", encoding)
+	}
+}
+
+// parseFilePermissions parses an octal permission string (e.g. "0644" or
+// "644").  An empty string returns the default permission 0644.
+func parseFilePermissions(s string) (os.FileMode, error) {
+	if s == "" {
+		return 0644, nil
+	}
+	n, err := strconv.ParseUint(s, 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("invalid permissions %q: must be an octal string like \"0644\"", s)
+	}
+	return os.FileMode(n), nil
+}
+
+// setFileOwner changes the ownership of path to the user (and optionally
+// group) specified in owner.  owner may be "user" or "user:group".
+func setFileOwner(path, owner string) error {
+	parts := strings.SplitN(owner, ":", 2)
+	u, err := osuser.Lookup(parts[0])
+	if err != nil {
+		return fmt.Errorf("failed to look up owner user %q: %w", parts[0], err)
+	}
+	uid, err := strconv.Atoi(u.Uid)
+	if err != nil {
+		return fmt.Errorf("invalid UID for user %q: %w", parts[0], err)
+	}
+	var gid int
+	if len(parts) == 2 && parts[1] != "" {
+		g, err := osuser.LookupGroup(parts[1])
+		if err != nil {
+			return fmt.Errorf("failed to look up owner group %q: %w", parts[1], err)
+		}
+		gid, err = strconv.Atoi(g.Gid)
+		if err != nil {
+			return fmt.Errorf("invalid GID for group %q: %w", parts[1], err)
+		}
+	} else {
+		// Use the user's primary group.
+		gid, err = strconv.Atoi(u.Gid)
+		if err != nil {
+			return fmt.Errorf("invalid primary GID for user %q: %w", parts[0], err)
+		}
+	}
+	if err := unix.Lchown(path, uid, gid); err != nil {
+		return fmt.Errorf("failed to chown %s to %s: %w", path, owner, err)
+	}
+	return nil
+}
+
+// WriteFiles processes all entries in the write_files cloud-config directive.
+// Errors are returned on the first failure; files written before the failure
+// are not rolled back.
+func WriteFiles(files []types.WriteFile) error {
+	for _, f := range files {
+		if err := writeOneFile(f); err != nil {
+			return fmt.Errorf("write_files: path %q: %w", f.Path, err)
+		}
+	}
+	return nil
+}
+
+func writeOneFile(f types.WriteFile) error {
+	path := filepath.Clean(f.Path)
+	if !isValidWritePath(path) {
+		return fmt.Errorf("invalid path %q: must be a non-root absolute path", f.Path)
+	}
+
+	data, err := decodeWriteFileContent(f.Content, f.Encoding)
+	if err != nil {
+		return fmt.Errorf("failed to decode content: %w", err)
+	}
+
+	perm, err := parseFilePermissions(f.Permissions)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("failed to create parent directories for %s: %w", path, err)
+	}
+
+	if f.Append {
+		fh, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, perm)
+		if err != nil {
+			return fmt.Errorf("failed to open %s for append: %w", path, err)
+		}
+		_, werr := fh.Write(data)
+		cerr := fh.Close()
+		if werr != nil {
+			return fmt.Errorf("failed to write to %s: %w", path, werr)
+		}
+		if cerr != nil {
+			return fmt.Errorf("failed to close %s: %w", path, cerr)
+		}
+	} else {
+		if err := writeFileAtomic(path, data, perm); err != nil {
+			return err
+		}
+	}
+
+	if f.Owner != "" {
+		if err := setFileOwner(path, f.Owner); err != nil {
+			return err
+		}
+	}
+
+	slog.Info("wrote file", "path", path)
 	return nil
 }
 

@@ -595,3 +595,77 @@ func mustReadFile(t *testing.T, path string) string {	t.Helper()
 	}
 	return string(b)
 }
+
+func TestUnmarshalUserDataWriteFiles(t *testing.T) {
+	input := `#cloud-config
+hostname: myhost
+write_files:
+  - path: /etc/myapp.conf
+    content: |
+      key=value
+    permissions: "0644"
+  - path: /usr/local/bin/script.sh
+    content: aGVsbG8=
+    encoding: b64
+    permissions: "0755"
+    append: true
+`
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if ud.Hostname != "myhost" {
+		t.Errorf("Hostname = %q, want %q", ud.Hostname, "myhost")
+	}
+	if len(ud.WriteFiles) != 2 {
+		t.Fatalf("len(WriteFiles) = %d, want 2", len(ud.WriteFiles))
+	}
+
+	f0 := ud.WriteFiles[0]
+	if f0.Path != "/etc/myapp.conf" {
+		t.Errorf("WriteFiles[0].Path = %q, want %q", f0.Path, "/etc/myapp.conf")
+	}
+	if f0.Content != "key=value\n" {
+		t.Errorf("WriteFiles[0].Content = %q, want %q", f0.Content, "key=value\n")
+	}
+	if f0.Permissions != "0644" {
+		t.Errorf("WriteFiles[0].Permissions = %q, want %q", f0.Permissions, "0644")
+	}
+	if f0.Append {
+		t.Errorf("WriteFiles[0].Append = true, want false")
+	}
+
+	f1 := ud.WriteFiles[1]
+	if f1.Path != "/usr/local/bin/script.sh" {
+		t.Errorf("WriteFiles[1].Path = %q, want %q", f1.Path, "/usr/local/bin/script.sh")
+	}
+	if f1.Encoding != "b64" {
+		t.Errorf("WriteFiles[1].Encoding = %q, want %q", f1.Encoding, "b64")
+	}
+	if f1.Permissions != "0755" {
+		t.Errorf("WriteFiles[1].Permissions = %q, want %q", f1.Permissions, "0755")
+	}
+	if !f1.Append {
+		t.Errorf("WriteFiles[1].Append = false, want true")
+	}
+}
+
+func TestUnmarshalUserDataWriteFilesJSON(t *testing.T) {
+	input := `{"hostname":"myhost","write_files":[{"path":"/etc/test.conf","content":"hello","permissions":"0600"}]}`
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if len(ud.WriteFiles) != 1 {
+		t.Fatalf("len(WriteFiles) = %d, want 1", len(ud.WriteFiles))
+	}
+	if ud.WriteFiles[0].Path != "/etc/test.conf" {
+		t.Errorf("Path = %q, want %q", ud.WriteFiles[0].Path, "/etc/test.conf")
+	}
+	if ud.WriteFiles[0].Content != "hello" {
+		t.Errorf("Content = %q, want %q", ud.WriteFiles[0].Content, "hello")
+	}
+	if ud.WriteFiles[0].Permissions != "0600" {
+		t.Errorf("Permissions = %q, want %q", ud.WriteFiles[0].Permissions, "0600")
+	}
+}

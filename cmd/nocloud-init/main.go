@@ -258,6 +258,13 @@ Options:
 		}
 	}
 
+	if len(userData.WriteFiles) > 0 {
+		if err := system.WriteFiles(userData.WriteFiles); err != nil {
+			slog.Error("failed to write files", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	// Pass effective hostname into hosts-file update so meta-data-sourced
 	// hostnames are reflected there too.
 	effectiveUserData := userData
