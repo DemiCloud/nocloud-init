@@ -246,6 +246,13 @@ Options:
 		}
 	}
 
+	if len(userData.Users) > 0 {
+		if err := system.CreateUsers(userData.Users); err != nil {
+			slog.Error("failed to create users", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	if userData.User != "" && userData.Password != "" {
 		if !system.IsValidHashedPassword(userData.Password) {
 			slog.Error("password must be a pre-hashed credential (e.g. $6$...); plaintext passwords are not supported")

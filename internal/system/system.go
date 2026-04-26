@@ -584,3 +584,103 @@ func createOneGroup(g types.GroupEntry) error {
 	}
 	return nil
 }
+
+// CreateUsers creates each user entry in the users cloud-config list.
+// Entries named "default" are silently skipped. If a user already exists
+// (useradd exits with code 9), it is left in place and subsequent options
+// (password, sudo, SSH keys) are still applied.
+func CreateUsers(users types.UserList) error {
+	for _, u := range users {
+		if u.Name == "" || u.Name == "default" {
+			continue
+		}
+		if err := createOneUser(u); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func createOneUser(u types.UserEntry) error {
+	if !isValidLinuxName(u.Name) {
+		return fmt.Errorf("invalid user name %q", u.Name)
+	}
+
+	args := []string{}
+	if u.System {
+		args = append(args, "--system")
+	}
+	if u.NoCreateHome {
+		args = append(args, "--no-create-home")
+	} else {
+		args = append(args, "--create-home")
+	}
+	if u.Shell != "" {
+		if !filepath.IsAbs(u.Shell) {
+			return fmt.Errorf("user %q: shell %q must be an absolute path", u.Name, u.Shell)
+		}
+		args = append(args, "--shell", u.Shell)
+	}
+	if u.Gecos != "" {
+		args = append(args, "--comment", u.Gecos)
+	}
+	if len(u.Groups) > 0 {
+		for _, g := range u.Groups {
+			if !isValidLinuxName(g) {
+				return fmt.Errorf("user %q: invalid group name %q", u.Name, g)
+			}
+		}
+		args = append(args, "--groups", strings.Join(u.Groups, ","))
+	}
+	args = append(args, u.Name)
+
+	cmd := exec.Command("useradd", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// Exit code 9 means the user already exists; leave them in place.
+		exitErr, ok := err.(*exec.ExitError)
+		if ok && exitErr.ExitCode() == 9 {
+			slog.Debug("user already exists, skipping creation", "user", u.Name)
+		} else {
+			return fmt.Errorf("useradd %q: %w: %s", u.Name, err, strings.TrimSpace(string(out)))
+		}
+	} else {
+		slog.Info("created user", "user", u.Name)
+	}
+
+	if u.HashedPasswd != "" {
+		if !IsValidHashedPassword(u.HashedPasswd) {
+			return fmt.Errorf("user %q: hashed_passwd must be a pre-hashed crypt(3) credential", u.Name)
+		}
+		if err := updatePasswordCmd(exec.Command("chpasswd", "-e"), u.Name, u.HashedPasswd); err != nil {
+			return fmt.Errorf("user %q: failed to set password: %w", u.Name, err)
+		}
+	}
+
+	if u.LockPasswd {
+		cmd := exec.Command("passwd", "--lock", u.Name)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("user %q: passwd --lock: %w: %s", u.Name, err, strings.TrimSpace(string(out)))
+		}
+		slog.Info("locked password for user", "user", u.Name)
+	}
+
+	if u.Sudo != "" {
+		// Write a sudoers drop-in. The filename is the validated user name so
+		// it cannot contain path separators or other dangerous characters.
+		sudoersPath := filepath.Join("/etc/sudoers.d", u.Name)
+		content := u.Name + " " + u.Sudo + "\n"
+		if err := writeFileAtomic(sudoersPath, []byte(content), 0440); err != nil {
+			return fmt.Errorf("user %q: failed to write sudoers rule: %w", u.Name, err)
+		}
+		slog.Info("wrote sudoers rule", "user", u.Name, "path", sudoersPath)
+	}
+
+	if len(u.SSHAuthorizedKeys) > 0 {
+		if err := WriteAuthorizedKeys(u.Name, u.SSHAuthorizedKeys); err != nil {
+			return fmt.Errorf("user %q: failed to write authorized_keys: %w", u.Name, err)
+		}
+	}
+
+	return nil
+}

@@ -151,6 +151,115 @@ func (g *GroupList) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// UserGroupList parses either a comma-separated string or a sequence of
+// strings from a users.[].groups field.
+type UserGroupList []string
+
+func (u *UserGroupList) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		for _, g := range strings.Split(value.Value, ",") {
+			if g = strings.TrimSpace(g); g != "" {
+				*u = append(*u, g)
+			}
+		}
+		return nil
+	case yaml.SequenceNode:
+		var groups []string
+		if err := value.Decode(&groups); err != nil {
+			return fmt.Errorf("users groups: %w", err)
+		}
+		*u = groups
+		return nil
+	default:
+		return fmt.Errorf("users.groups must be a string or list")
+	}
+}
+
+func (u *UserGroupList) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		for _, g := range strings.Split(s, ",") {
+			if g = strings.TrimSpace(g); g != "" {
+				*u = append(*u, g)
+			}
+		}
+		return nil
+	}
+	var list []string
+	if err := json.Unmarshal(data, &list); err != nil {
+		return fmt.Errorf("users.groups must be a string or list: %w", err)
+	}
+	*u = list
+	return nil
+}
+
+// UserEntry describes a single user to create from the users cloud-config list.
+// The special name "default" is recognized and skipped.
+type UserEntry struct {
+	Name              string        `yaml:"name" json:"name"`
+	Gecos             string        `yaml:"gecos" json:"gecos"`
+	Groups            UserGroupList `yaml:"groups" json:"groups"`
+	Shell             string        `yaml:"shell" json:"shell"`
+	// HashedPasswd is a pre-hashed crypt(3) string (e.g. "$6$...").
+	HashedPasswd      string        `yaml:"hashed_passwd" json:"hashed_passwd"`
+	// LockPasswd locks the account after creation when true.
+	LockPasswd        bool          `yaml:"lock_passwd" json:"lock_passwd"`
+	// NoCreateHome skips home directory creation.
+	NoCreateHome      bool          `yaml:"no_create_home" json:"no_create_home"`
+	// System creates the user as a system account.
+	System            bool          `yaml:"system" json:"system"`
+	// Sudo is the rule written to /etc/sudoers.d/<name>. Empty means no rule.
+	Sudo              string        `yaml:"sudo" json:"sudo"`
+	// SSHAuthorizedKeys are public keys installed for this user.
+	SSHAuthorizedKeys []string      `yaml:"ssh_authorized_keys" json:"ssh_authorized_keys"`
+}
+
+// UserList is the parsed form of the users cloud-config key.
+// Each item is either the string "default" (skipped) or a user mapping.
+type UserList []UserEntry
+
+func (u *UserList) UnmarshalYAML(value *yaml.Node) error {
+	if value.Kind != yaml.SequenceNode {
+		return fmt.Errorf("users must be a sequence")
+	}
+	for _, item := range value.Content {
+		switch item.Kind {
+		case yaml.ScalarNode:
+			*u = append(*u, UserEntry{Name: item.Value})
+		case yaml.MappingNode:
+			var entry UserEntry
+			if err := item.Decode(&entry); err != nil {
+				return fmt.Errorf("users entry: %w", err)
+			}
+			*u = append(*u, entry)
+		default:
+			return fmt.Errorf("users item must be a string or mapping")
+		}
+	}
+	return nil
+}
+
+func (u *UserList) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("users must be an array: %w", err)
+	}
+	for _, item := range raw {
+		var s string
+		if err := json.Unmarshal(item, &s); err == nil {
+			*u = append(*u, UserEntry{Name: s})
+			continue
+		}
+		var entry UserEntry
+		if err := json.Unmarshal(item, &entry); err != nil {
+			return fmt.Errorf("users entry: %w", err)
+		}
+		*u = append(*u, entry)
+	}
+	return nil
+}
+
 // WriteFile describes a single file entry from the write_files cloud-config
 // directive.  Content is decoded according to Encoding before writing:
 //   - "" or "text/plain" — written as-is
@@ -183,9 +292,8 @@ type UserData struct {
 	Chpasswd struct {
 		Expire bool `yaml:"expire" json:"expire"`
 	} `yaml:"chpasswd" json:"chpasswd"`
-	// Users is defined by the NoCloud spec but not yet implemented.
-	// Proxmox does not populate this field; support may be added in a future release.
-	Users []string `yaml:"users" json:"users"`
+	// Users lists users to create. The special entry "default" is skipped.
+	Users UserList `yaml:"users" json:"users"`
 	// SSHAuthorizedKeys lists public keys to install for User.
 	// Each run replaces the nocloud-init–managed block in the user's
 	// authorized_keys file, leaving any pre-existing keys untouched.

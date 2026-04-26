@@ -935,3 +935,49 @@ func TestCreateGroupsInvalidMember(t *testing.T) {
 		t.Fatal("CreateGroups() expected error for invalid member name, got nil")
 	}
 }
+
+func TestCreateUsersSkipsDefault(t *testing.T) {
+	// "default" entries must be skipped without executing any command.
+	users := types.UserList{{Name: "default"}, {Name: ""}}
+	// If any exec is attempted this test would fail in CI (no useradd available
+	// without root). The fact that it returns nil proves nothing was exec'd.
+	if err := CreateUsers(users); err != nil {
+		t.Fatalf("CreateUsers() unexpected error: %v", err)
+	}
+}
+
+func TestCreateUsersInvalidName(t *testing.T) {
+	users := types.UserList{{Name: "bad user"}}
+	if err := CreateUsers(users); err == nil {
+		t.Fatal("CreateUsers() expected error for invalid user name, got nil")
+	}
+}
+
+func TestCreateUsersInvalidShell(t *testing.T) {
+	users := types.UserList{{Name: "alice", Shell: "bash"}} // not absolute
+	if err := CreateUsers(users); err == nil {
+		t.Fatal("CreateUsers() expected error for relative shell path, got nil")
+	}
+}
+
+func TestCreateUsersInvalidGroupInList(t *testing.T) {
+	users := types.UserList{{Name: "alice", Groups: types.UserGroupList{"bad group"}}}
+	if err := CreateUsers(users); err == nil {
+		t.Fatal("CreateUsers() expected error for invalid group name, got nil")
+	}
+}
+
+func TestCreateUsersInvalidHashedPasswd(t *testing.T) {
+	// A fake useradd so we reach the password step.
+	bin := t.TempDir()
+	fakeExe := filepath.Join(bin, "useradd")
+	if err := os.WriteFile(fakeExe, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("writing fake useradd: %v", err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	users := types.UserList{{Name: "alice", HashedPasswd: "plaintext"}}
+	if err := CreateUsers(users); err == nil {
+		t.Fatal("CreateUsers() expected error for plaintext password, got nil")
+	}
+}

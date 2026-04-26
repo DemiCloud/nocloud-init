@@ -2,6 +2,7 @@ package types
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -26,7 +27,7 @@ func TestUnmarshalUserData(t *testing.T) {
 				ManageEtcHosts: true,
 				User:           "testuser",
 				Password:       "$5$testsalt$fakehashedpasswordfortestingpurposes",
-				Users:          []string{"default"},
+				Users:          UserList{{Name: "default"}},
 			},
 		},
 		{
@@ -117,14 +118,8 @@ manage_etc_hosts: true
 			if ud.Chpasswd.Expire != tt.want.Chpasswd.Expire {
 				t.Errorf("Chpasswd.Expire = %v, want %v", ud.Chpasswd.Expire, tt.want.Chpasswd.Expire)
 			}
-			if len(ud.Users) != len(tt.want.Users) {
-				t.Errorf("len(Users) = %d, want %d", len(ud.Users), len(tt.want.Users))
-			} else {
-				for i := range tt.want.Users {
-					if ud.Users[i] != tt.want.Users[i] {
-						t.Errorf("Users[%d] = %q, want %q", i, ud.Users[i], tt.want.Users[i])
-					}
-				}
+			if !reflect.DeepEqual(ud.Users, tt.want.Users) {
+				t.Errorf("Users = %+v, want %+v", ud.Users, tt.want.Users)
 			}
 		})
 	}
@@ -774,5 +769,69 @@ func TestUnmarshalGroupsJSON(t *testing.T) {
 	}
 	if ud.Groups[1].Name != "devs" || len(ud.Groups[1].Members) != 2 {
 		t.Errorf("Groups[1] = %+v, want {Name:devs Members:[alice bob]}", ud.Groups[1])
+	}
+}
+
+func TestUnmarshalUsersListMixed(t *testing.T) {
+	input := `#cloud-config
+users:
+  - default
+  - name: alice
+    gecos: Alice Wonderland
+    groups: sudo, docker
+    shell: /bin/bash
+    hashed_passwd: "$6$salt$hash"
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ssh-rsa AAAA...
+`
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if len(ud.Users) != 2 {
+		t.Fatalf("len(Users) = %d, want 2", len(ud.Users))
+	}
+	if ud.Users[0].Name != "default" {
+		t.Errorf("Users[0].Name = %q, want %q", ud.Users[0].Name, "default")
+	}
+	alice := ud.Users[1]
+	if alice.Name != "alice" {
+		t.Errorf("alice.Name = %q, want %q", alice.Name, "alice")
+	}
+	if alice.Gecos != "Alice Wonderland" {
+		t.Errorf("alice.Gecos = %q, want %q", alice.Gecos, "Alice Wonderland")
+	}
+	if len(alice.Groups) != 2 || alice.Groups[0] != "sudo" || alice.Groups[1] != "docker" {
+		t.Errorf("alice.Groups = %v, want [sudo docker]", alice.Groups)
+	}
+	if alice.Shell != "/bin/bash" {
+		t.Errorf("alice.Shell = %q, want %q", alice.Shell, "/bin/bash")
+	}
+	if alice.Sudo != "ALL=(ALL) NOPASSWD:ALL" {
+		t.Errorf("alice.Sudo = %q, want %q", alice.Sudo, "ALL=(ALL) NOPASSWD:ALL")
+	}
+	if len(alice.SSHAuthorizedKeys) != 1 {
+		t.Errorf("alice.SSHAuthorizedKeys = %v, want 1 key", alice.SSHAuthorizedKeys)
+	}
+}
+
+func TestUnmarshalUsersJSON(t *testing.T) {
+	input := `{"users":["default",{"name":"bob","shell":"/bin/sh","groups":["wheel"]}]}`
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if len(ud.Users) != 2 {
+		t.Fatalf("len(Users) = %d, want 2", len(ud.Users))
+	}
+	if ud.Users[0].Name != "default" {
+		t.Errorf("Users[0].Name = %q, want %q", ud.Users[0].Name, "default")
+	}
+	if ud.Users[1].Name != "bob" {
+		t.Errorf("Users[1].Name = %q, want %q", ud.Users[1].Name, "bob")
+	}
+	if len(ud.Users[1].Groups) != 1 || ud.Users[1].Groups[0] != "wheel" {
+		t.Errorf("Users[1].Groups = %v, want [wheel]", ud.Users[1].Groups)
 	}
 }
