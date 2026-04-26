@@ -9,6 +9,48 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// RuncmdItem represents a single entry in the runcmd cloud-config list.
+// Per the cloud-init spec, each entry is either:
+//   - a plain string, which is passed to "sh -c <string>"
+//   - a list of strings, which is executed directly via execve (no shell)
+//
+// Only one of Shell or Args will be set after unmarshaling.
+type RuncmdItem struct {
+	Shell string   // non-empty: run via sh -c
+	Args  []string // non-nil: exec directly
+}
+
+func (r *RuncmdItem) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		r.Shell = value.Value
+		return nil
+	case yaml.SequenceNode:
+		var args []string
+		if err := value.Decode(&args); err != nil {
+			return fmt.Errorf("runcmd item sequence: %w", err)
+		}
+		r.Args = args
+		return nil
+	default:
+		return fmt.Errorf("runcmd item must be a string or a list of strings")
+	}
+}
+
+func (r *RuncmdItem) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		r.Shell = s
+		return nil
+	}
+	var args []string
+	if err := json.Unmarshal(data, &args); err != nil {
+		return fmt.Errorf("runcmd item must be a string or list of strings: %w", err)
+	}
+	r.Args = args
+	return nil
+}
+
 // WriteFile describes a single file entry from the write_files cloud-config
 // directive.  Content is decoded according to Encoding before writing:
 //   - "" or "text/plain" — written as-is
@@ -50,6 +92,9 @@ type UserData struct {
 	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys" json:"ssh_authorized_keys"`
 	// WriteFiles lists files to create or update on the system.
 	WriteFiles []WriteFile `yaml:"write_files" json:"write_files"`
+	// Runcmd lists commands to run after all other configuration is applied.
+	// Each item is either a shell string (run via sh -c) or a list of exec args.
+	Runcmd []RuncmdItem `yaml:"runcmd" json:"runcmd"`
 }
 
 // NetworkConfig supports both NoCloud network-config v1 and v2 formats.

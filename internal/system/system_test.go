@@ -811,3 +811,71 @@ func TestWriteFilesAppendCreatesFile(t *testing.T) {
 		t.Errorf("content = %q, want %q", string(got), want)
 	}
 }
+
+func TestRunCmdShell(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker.txt")
+
+	cmds := []types.RuncmdItem{
+		{Shell: "echo hello > " + marker},
+	}
+	if err := RunCmd(cmds); err != nil {
+		t.Fatalf("RunCmd() error = %v", err)
+	}
+	got, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("marker file not created: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != "hello" {
+		t.Errorf("marker content = %q, want %q", strings.TrimSpace(string(got)), "hello")
+	}
+}
+
+func TestRunCmdExec(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "exec-marker.txt")
+
+	cmds := []types.RuncmdItem{
+		{Args: []string{"touch", marker}},
+	}
+	if err := RunCmd(cmds); err != nil {
+		t.Fatalf("RunCmd() error = %v", err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("marker file not created: %v", err)
+	}
+}
+
+func TestRunCmdFailure(t *testing.T) {
+	cmds := []types.RuncmdItem{
+		{Shell: "exit 42"},
+	}
+	if err := RunCmd(cmds); err == nil {
+		t.Fatal("RunCmd() expected error for failing command, got nil")
+	}
+}
+
+func TestRunCmdEmptyArgList(t *testing.T) {
+	cmds := []types.RuncmdItem{
+		{Args: []string{}},
+	}
+	if err := RunCmd(cmds); err == nil {
+		t.Fatal("RunCmd() expected error for empty arg list, got nil")
+	}
+}
+
+func TestRunCmdStopsOnFirstFailure(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "should-not-exist.txt")
+
+	cmds := []types.RuncmdItem{
+		{Shell: "exit 1"},
+		{Args: []string{"touch", marker}},
+	}
+	if err := RunCmd(cmds); err == nil {
+		t.Fatal("RunCmd() expected error, got nil")
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("second command ran despite first failure")
+	}
+}

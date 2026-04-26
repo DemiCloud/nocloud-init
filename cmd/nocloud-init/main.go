@@ -265,6 +265,13 @@ Options:
 		}
 	}
 
+	if len(userData.Runcmd) > 0 {
+		if err := system.RunCmd(userData.Runcmd); err != nil {
+			slog.Error("runcmd failed", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	// Pass effective hostname into hosts-file update so meta-data-sourced
 	// hostnames are reflected there too.
 	effectiveUserData := userData

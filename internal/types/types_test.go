@@ -669,3 +669,51 @@ func TestUnmarshalUserDataWriteFilesJSON(t *testing.T) {
 		t.Errorf("Permissions = %q, want %q", ud.WriteFiles[0].Permissions, "0600")
 	}
 }
+
+func TestUnmarshalUserDataRuncmd(t *testing.T) {
+	input := `#cloud-config
+runcmd:
+  - echo hello
+  - [touch, /tmp/runcmd-test]
+  - sh -c "echo world"
+`
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if len(ud.Runcmd) != 3 {
+		t.Fatalf("len(Runcmd) = %d, want 3", len(ud.Runcmd))
+	}
+	if ud.Runcmd[0].Shell != "echo hello" {
+		t.Errorf("Runcmd[0].Shell = %q, want %q", ud.Runcmd[0].Shell, "echo hello")
+	}
+	if ud.Runcmd[0].Args != nil {
+		t.Errorf("Runcmd[0].Args should be nil for shell item")
+	}
+	if len(ud.Runcmd[1].Args) != 2 || ud.Runcmd[1].Args[0] != "touch" || ud.Runcmd[1].Args[1] != "/tmp/runcmd-test" {
+		t.Errorf("Runcmd[1].Args = %v, want [touch /tmp/runcmd-test]", ud.Runcmd[1].Args)
+	}
+	if ud.Runcmd[1].Shell != "" {
+		t.Errorf("Runcmd[1].Shell should be empty for exec item")
+	}
+	if ud.Runcmd[2].Shell != `sh -c "echo world"` {
+		t.Errorf("Runcmd[2].Shell = %q, want %q", ud.Runcmd[2].Shell, `sh -c "echo world"`)
+	}
+}
+
+func TestUnmarshalUserDataRuncmdJSON(t *testing.T) {
+	input := `{"runcmd":["echo hello",["touch","/tmp/x"]]}`
+	var ud UserData
+	if err := UnmarshalUserData([]byte(input), &ud, false); err != nil {
+		t.Fatalf("UnmarshalUserData() error = %v", err)
+	}
+	if len(ud.Runcmd) != 2 {
+		t.Fatalf("len(Runcmd) = %d, want 2", len(ud.Runcmd))
+	}
+	if ud.Runcmd[0].Shell != "echo hello" {
+		t.Errorf("Runcmd[0].Shell = %q, want %q", ud.Runcmd[0].Shell, "echo hello")
+	}
+	if len(ud.Runcmd[1].Args) != 2 {
+		t.Errorf("Runcmd[1].Args = %v, want [touch /tmp/x]", ud.Runcmd[1].Args)
+	}
+}

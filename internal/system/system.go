@@ -483,3 +483,46 @@ func writeAuthorizedKeysAt(sshDir, akPath string, keys []string) error {
 	slog.Info("updated authorized_keys", "path", akPath, "keys", len(sanitized))
 	return nil
 }
+
+// RunCmd executes each entry in the runcmd cloud-config list in order.
+// String items are run via sh -c; list items are exec'd directly (no shell).
+// Stdout and stderr are captured and logged at debug level.
+// Execution stops and an error is returned on the first failure.
+func RunCmd(cmds []types.RuncmdItem) error {
+	for i, item := range cmds {
+		if err := runOneCmd(item); err != nil {
+			return fmt.Errorf("runcmd[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+func runOneCmd(item types.RuncmdItem) error {
+	var cmd *exec.Cmd
+	if item.Shell != "" {
+		cmd = exec.Command("sh", "-c", item.Shell)
+	} else {
+		if len(item.Args) == 0 {
+			return fmt.Errorf("empty command list")
+		}
+		cmd = exec.Command(item.Args[0], item.Args[1:]...)
+	}
+	out, err := cmd.CombinedOutput()
+	if len(out) > 0 {
+		slog.Debug("runcmd output", "cmd", cmdLabel(item), "output", strings.TrimRight(string(out), "\n"))
+	}
+	if err != nil {
+		return fmt.Errorf("command %q failed: %w", cmdLabel(item), err)
+	}
+	slog.Info("runcmd executed", "cmd", cmdLabel(item))
+	return nil
+}
+
+// cmdLabel returns a short human-readable label for a runcmd item for use in
+// log messages and error strings.
+func cmdLabel(item types.RuncmdItem) string {
+	if item.Shell != "" {
+		return item.Shell
+	}
+	return strings.Join(item.Args, " ")
+}
