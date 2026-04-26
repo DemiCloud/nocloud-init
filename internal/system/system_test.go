@@ -309,3 +309,163 @@ func TestUpdateHostsFile_Permissions(t *testing.T) {
 		t.Errorf("hosts file permissions = %04o, want 0644", got)
 	}
 }
+
+func TestWriteAuthorizedKeysAt(t *testing.T) {
+	const key1 = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI test-key-1 user@host"
+	const key2 = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC test-key-2 user@host"
+
+	tests := []struct {
+		name         string
+		initialFile  string // "" means file doesn't exist yet
+		keys         []string
+		wantContains []string
+		wantAbsent   []string
+	}{
+		{
+			name:        "new file created with block",
+			initialFile: "",
+			keys:        []string{key1},
+			wantContains: []string{
+				"# BEGIN nocloud-init managed keys",
+				key1,
+				"# END nocloud-init managed keys",
+			},
+		},
+		{
+			name:        "existing file without block gets block appended",
+			initialFile: "ssh-rsa AAAA pre-existing-key user@host\n",
+			keys:        []string{key1},
+			wantContains: []string{
+				"pre-existing-key",
+				"# BEGIN nocloud-init managed keys",
+				key1,
+				"# END nocloud-init managed keys",
+			},
+		},
+		{
+			name:        "existing file without trailing newline gets separator before block",
+			initialFile: "ssh-rsa AAAA pre-existing-key user@host",
+			keys:        []string{key1},
+			wantContains: []string{
+				"pre-existing-key",
+				"# BEGIN nocloud-init managed keys",
+				key1,
+				"# END nocloud-init managed keys",
+			},
+		},
+		{
+			name:        "existing block is replaced, not duplicated",
+			initialFile: "# BEGIN nocloud-init managed keys\n" + key2 + "\n# END nocloud-init managed keys\n",
+			keys:        []string{key1},
+			wantContains: []string{
+				"# BEGIN nocloud-init managed keys",
+				key1,
+				"# END nocloud-init managed keys",
+			},
+			wantAbsent: []string{key2},
+		},
+		{
+			name: "block in middle of file: surrounding keys preserved",
+			initialFile: "ssh-rsa AAAA before user@host\n" +
+				"# BEGIN nocloud-init managed keys\n" + key2 + "\n# END nocloud-init managed keys\n" +
+				"ssh-rsa AAAA after user@host\n",
+			keys: []string{key1},
+			wantContains: []string{
+				"before",
+				"# BEGIN nocloud-init managed keys",
+				key1,
+				"# END nocloud-init managed keys",
+				"after",
+			},
+			wantAbsent: []string{key2},
+		},
+		{
+			name:        "multiple keys written",
+			initialFile: "",
+			keys:        []string{key1, key2},
+			wantContains: []string{
+				"# BEGIN nocloud-init managed keys",
+				key1,
+				key2,
+				"# END nocloud-init managed keys",
+			},
+		},
+		{
+			name:        "invalid entries are skipped",
+			initialFile: "",
+			keys:        []string{"", key1, "ssh-rsa bad\x00key", "ssh-rsa with\nnewline"},
+			wantContains: []string{
+				key1,
+				"# BEGIN nocloud-init managed keys",
+				"# END nocloud-init managed keys",
+			},
+			wantAbsent: []string{"bad\x00key", "with\nnewline"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			sshDir := filepath.Join(dir, ".ssh")
+			akPath := filepath.Join(sshDir, "authorized_keys")
+
+			if tt.initialFile != "" {
+				if err := os.MkdirAll(sshDir, 0700); err != nil {
+					t.Fatalf("MkdirAll: %v", err)
+				}
+				if err := os.WriteFile(akPath, []byte(tt.initialFile), 0600); err != nil {
+					t.Fatalf("WriteFile: %v", err)
+				}
+			}
+
+			if err := writeAuthorizedKeysAt(sshDir, akPath, tt.keys); err != nil {
+				t.Fatalf("writeAuthorizedKeysAt() error = %v", err)
+			}
+
+			content, err := os.ReadFile(akPath)
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			result := string(content)
+
+			for _, want := range tt.wantContains {
+				if !strings.Contains(result, want) {
+					t.Errorf("result missing %q\ngot:\n%s", want, result)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(result, absent) {
+					t.Errorf("result should not contain %q\ngot:\n%s", absent, result)
+				}
+			}
+		})
+	}
+}
+
+func TestWriteAuthorizedKeysAt_Permissions(t *testing.T) {
+	dir := t.TempDir()
+	sshDir := filepath.Join(dir, ".ssh")
+	akPath := filepath.Join(sshDir, "authorized_keys")
+
+	if err := writeAuthorizedKeysAt(sshDir, akPath, []string{"ssh-ed25519 AAAA key"}); err != nil {
+		t.Fatalf("writeAuthorizedKeysAt() error = %v", err)
+	}
+
+	// .ssh directory must be 0700
+	sshInfo, err := os.Stat(sshDir)
+	if err != nil {
+		t.Fatalf("Stat .ssh: %v", err)
+	}
+	if got := sshInfo.Mode().Perm(); got != 0700 {
+		t.Errorf(".ssh permissions = %04o, want 0700", got)
+	}
+
+	// authorized_keys must be 0600
+	akInfo, err := os.Stat(akPath)
+	if err != nil {
+		t.Fatalf("Stat authorized_keys: %v", err)
+	}
+	if got := akInfo.Mode().Perm(); got != 0600 {
+		t.Errorf("authorized_keys permissions = %04o, want 0600", got)
+	}
+}

@@ -251,6 +251,13 @@ Options:
 		slog.Info("updated password", "user", userData.User)
 	}
 
+	if userData.User != "" && len(userData.SSHAuthorizedKeys) > 0 {
+		if err := system.WriteAuthorizedKeys(userData.User, userData.SSHAuthorizedKeys); err != nil {
+			slog.Error("failed to write authorized_keys", "user", userData.User, "error", err)
+			os.Exit(1)
+		}
+	}
+
 	// Pass effective hostname into hosts-file update so meta-data-sourced
 	// hostnames are reflected there too.
 	effectiveUserData := userData

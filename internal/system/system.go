@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	osuser "os/user"
 	"path/filepath"
 	"strings"
 
@@ -210,5 +211,87 @@ func CheckAndGenerateSSHKeys() error {
 		return fmt.Errorf("failed to generate SSH host keys: %v: %s", err, out)
 	}
 	slog.Info("ensured SSH host keys are present")
+	return nil
+}
+
+// authorizedKeys{Begin,End}Marker delimit the block of keys managed by
+// nocloud-init inside an authorized_keys file.  Any pre-existing keys outside
+// the block are preserved.  On every run the block content is replaced with
+// the current set from user-data, making the operation idempotent.
+const (
+	authorizedKeysBeginMarker = "# BEGIN nocloud-init managed keys"
+	authorizedKeysEndMarker   = "# END nocloud-init managed keys"
+)
+
+// WriteAuthorizedKeys installs keys into ~user/.ssh/authorized_keys.
+// It looks up the user's home directory via the system passwd database.
+// The .ssh directory is created with mode 0700 if absent; the
+// authorized_keys file is written with mode 0600.
+func WriteAuthorizedKeys(user string, keys []string) error {
+	u, err := osuser.Lookup(user)
+	if err != nil {
+		return fmt.Errorf("failed to look up user %q: %w", user, err)
+	}
+	sshDir := filepath.Join(u.HomeDir, ".ssh")
+	akPath := filepath.Join(sshDir, "authorized_keys")
+	return writeAuthorizedKeysAt(sshDir, akPath, keys)
+}
+
+// writeAuthorizedKeysAt is the injectable inner function used directly by
+// tests, keeping I/O out of the real filesystem.
+func writeAuthorizedKeysAt(sshDir, akPath string, keys []string) error {
+	if err := os.MkdirAll(sshDir, 0700); err != nil {
+		return fmt.Errorf("failed to create .ssh directory %s: %w", sshDir, err)
+	}
+
+	// Sanitize: strip whitespace and drop entries with embedded control
+	// characters (newlines, null bytes) that would corrupt the file format.
+	var sanitized []string
+	for _, k := range keys {
+		k = strings.TrimSpace(k)
+		if k == "" || strings.ContainsAny(k, "\x00\r\n") {
+			slog.Warn("skipping invalid ssh_authorized_keys entry")
+			continue
+		}
+		sanitized = append(sanitized, k)
+	}
+
+	// Build the replacement block.
+	blockLines := make([]string, 0, len(sanitized)+2)
+	blockLines = append(blockLines, authorizedKeysBeginMarker)
+	blockLines = append(blockLines, sanitized...)
+	blockLines = append(blockLines, authorizedKeysEndMarker)
+	newBlock := strings.Join(blockLines, "\n")
+
+	// Read the existing file, if any.
+	existing, err := os.ReadFile(akPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read %s: %w", akPath, err)
+	}
+
+	var output string
+	if err == nil {
+		content := string(existing)
+		beginIdx := strings.Index(content, authorizedKeysBeginMarker)
+		endIdx := strings.Index(content, authorizedKeysEndMarker)
+		if beginIdx >= 0 && endIdx > beginIdx {
+			// Replace the existing managed block in-place.
+			output = content[:beginIdx] + newBlock + content[endIdx+len(authorizedKeysEndMarker):]
+		} else {
+			// Append a new block, ensuring a separating newline.
+			if len(content) > 0 && !strings.HasSuffix(content, "\n") {
+				content += "\n"
+			}
+			output = content + newBlock + "\n"
+		}
+	} else {
+		// Brand-new file.
+		output = newBlock + "\n"
+	}
+
+	if err := writeFileAtomic(akPath, []byte(output), 0600); err != nil {
+		return fmt.Errorf("failed to write %s: %w", akPath, err)
+	}
+	slog.Info("updated authorized_keys", "path", akPath, "keys", len(sanitized))
 	return nil
 }

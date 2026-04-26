@@ -24,6 +24,10 @@ type UserData struct {
 	// Users is defined by the NoCloud spec but not yet implemented.
 	// Proxmox does not populate this field; support may be added in a future release.
 	Users []string `yaml:"users" json:"users"`
+	// SSHAuthorizedKeys lists public keys to install for User.
+	// Each run replaces the nocloud-init–managed block in the user's
+	// authorized_keys file, leaving any pre-existing keys untouched.
+	SSHAuthorizedKeys []string `yaml:"ssh_authorized_keys" json:"ssh_authorized_keys"`
 }
 
 // NetworkConfig supports both NoCloud network-config v1 and v2 formats.
