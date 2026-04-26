@@ -313,6 +313,17 @@ type NetworkConfig struct {
 	Version   int                               `yaml:"version" json:"version"`
 	Config    []NetworkConfigV1Entry            `yaml:"config" json:"config"`              // v1
 	Ethernets map[string]NetworkConfigV2Ethernet `yaml:"ethernets" json:"ethernets"` // v2
+	VLANs     map[string]NetworkConfigV2VLAN    `yaml:"vlans" json:"vlans"`         // v2
+}
+
+// NetworkConfigV2VLAN describes a VLAN interface in a v2 network-config.
+// ID is the 802.1Q VLAN tag (0–4094). Link is the ID of the parent ethernet
+// entry. All common per-device properties (addresses, dhcp4, dhcp6, etc.) are
+// inherited from NetworkConfigV2Ethernet via embedding.
+type NetworkConfigV2VLAN struct {
+	ID   int    `yaml:"id" json:"id"`
+	Link string `yaml:"link" json:"link"`
+	NetworkConfigV2Ethernet `yaml:",inline" json:",inline"`
 }
 
 // NetworkConfigV1Entry is a single entry in a v1 network-config.

@@ -1501,3 +1501,114 @@ func assertFileNotContains(t *testing.T, path, substr string) {
 		t.Errorf("%s: expected NOT to contain %q\ngot:\n%s", filepath.Base(path), substr, string(b))
 	}
 }
+
+func TestGenerateV2NetworkConfigVLAN(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Addresses: []string{"192.0.2.10/24"},
+				Gateway4:  "192.0.2.1",
+			},
+		},
+		VLANs: map[string]types.NetworkConfigV2VLAN{
+			"vlan10": {ID: 10, Link: "eth0", NetworkConfigV2Ethernet: types.NetworkConfigV2Ethernet{DHCP4: true}},
+			"vlan20": {ID: 20, Link: "eth0", NetworkConfigV2Ethernet: types.NetworkConfigV2Ethernet{Addresses: []string{"10.20.0.5/24"}, Gateway4: "10.20.0.1"}},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	// Parent .network should list both VLANs
+	ethNet := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, ethNet, "VLAN=vlan10")
+	assertFileContains(t, ethNet, "VLAN=vlan20")
+
+	// vlan10 .netdev
+	vlan10Netdev := filepath.Join(dir, "10-cloud-init-vlan10.netdev")
+	assertFileContains(t, vlan10Netdev, "Kind=vlan")
+	assertFileContains(t, vlan10Netdev, "Id=10")
+	assertFileContains(t, vlan10Netdev, "Name=vlan10")
+
+	// vlan10 .network (DHCP)
+	vlan10Net := filepath.Join(dir, "10-cloud-init-vlan10.network")
+	assertFileContains(t, vlan10Net, "DHCP=ipv4")
+
+	// vlan20 .netdev
+	vlan20Netdev := filepath.Join(dir, "10-cloud-init-vlan20.netdev")
+	assertFileContains(t, vlan20Netdev, "Kind=vlan")
+	assertFileContains(t, vlan20Netdev, "Id=20")
+
+	// vlan20 .network (static)
+	vlan20Net := filepath.Join(dir, "10-cloud-init-vlan20.network")
+	assertFileContains(t, vlan20Net, "Address=10.20.0.5/24")
+	assertFileContains(t, vlan20Net, "Gateway=10.20.0.1")
+}
+
+func TestGenerateV2NetworkConfigVLANInvalidID(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {DHCP4: true},
+		},
+		VLANs: map[string]types.NetworkConfigV2VLAN{
+			"badboi": {ID: 9999, Link: "eth0"},
+		},
+	}
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err == nil {
+		t.Fatal("expected error for VLAN ID out of range, got nil")
+	}
+}
+
+func TestGenerateV2NetworkConfigVLANMissingLink(t *testing.T) {
+	dir := t.TempDir()
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {DHCP4: true},
+		},
+		VLANs: map[string]types.NetworkConfigV2VLAN{
+			"vlan5": {ID: 5},
+		},
+	}
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err == nil {
+		t.Fatal("expected error for missing VLAN link, got nil")
+	}
+}
+
+func TestParseNetworkConfigV2VLAN(t *testing.T) {
+	data, err := os.ReadFile("../../internal/types/testdata/nocloud-network-v2-vlan.yaml")
+	if err != nil {
+		// Try relative path from network package
+		data, err = os.ReadFile("../types/testdata/nocloud-network-v2-vlan.yaml")
+		if err != nil {
+			t.Fatalf("failed to read testdata: %v", err)
+		}
+	}
+	var cfg types.NetworkConfig
+	if err := types.UnmarshalNetworkConfig(data, &cfg, false); err != nil {
+		t.Fatalf("UnmarshalNetworkConfig() error = %v", err)
+	}
+	if len(cfg.VLANs) != 2 {
+		t.Fatalf("len(VLANs) = %d, want 2", len(cfg.VLANs))
+	}
+	v10, ok := cfg.VLANs["vlan10"]
+	if !ok {
+		t.Fatal("vlan10 not found")
+	}
+	if v10.ID != 10 {
+		t.Errorf("vlan10.ID = %d, want 10", v10.ID)
+	}
+	if v10.Link != "eth0" {
+		t.Errorf("vlan10.Link = %q, want %q", v10.Link, "eth0")
+	}
+	if !v10.DHCP4 {
+		t.Errorf("vlan10.DHCP4 = false, want true")
+	}
+}

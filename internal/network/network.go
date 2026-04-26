@@ -147,6 +147,9 @@ Gateway={{.Gateway}}
 {{- if .Optional}}
 RequiredForOnline=no
 {{- end}}
+{{- range .VLANs}}
+VLAN={{.}}
+{{- end}}
 {{- if .Gateway6}}
 
 [Route]
@@ -169,6 +172,17 @@ Name={{.Name}}
 const resolvConfTemplate = `{{- if .SearchDomain}}search {{.SearchDomain}}
 {{end -}}{{range .Nameservers}}nameserver {{.}}
 {{end}}options edns0
+`
+
+const netdevVLANTemplate = `[NetDev]
+Name={{.Name}}
+Kind=vlan
+
+[VLAN]
+Id={{.ID}}
+`
+
+const networkVLANMemberTemplate = `VLAN={{.VLANName}}
 `
 
 func netmaskToCIDR(netmask string) (int, error) {
@@ -346,6 +360,7 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			DHCP6      bool
 			Optional   bool
 			MTU        int
+			VLANs      []string
 		}{
 			Addresses:  addresses,
 			MacAddress: entry.MacAddress,
@@ -403,9 +418,31 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 	if err != nil {
 		return fmt.Errorf("failed to parse link template: %v", err)
 	}
+	netdevVLANTmpl, err := template.New("netdevVLAN").Parse(netdevVLANTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse netdev VLAN template: %v", err)
+	}
 
 	var nameservers []string
 	var searchDomains []string
+
+	// Build a map from ethernet key → sorted list of VLAN device names attached
+	// to that parent, so we can append VLAN= lines to the parent .network file.
+	parentToVLANs := make(map[string][]string)
+	if len(config.VLANs) > 0 {
+		vlanNames := make([]string, 0, len(config.VLANs))
+		for name := range config.VLANs {
+			vlanNames = append(vlanNames, name)
+		}
+		sort.Strings(vlanNames)
+		for _, vlanName := range vlanNames {
+			v := config.VLANs[vlanName]
+			if v.Link == "" {
+				return fmt.Errorf("vlan %q: link must be set to a parent ethernet ID", vlanName)
+			}
+			parentToVLANs[v.Link] = append(parentToVLANs[v.Link], vlanName)
+		}
+	}
 
 	// Sort keys for deterministic output
 	names := make([]string, 0, len(config.Ethernets))
@@ -432,7 +469,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 
 		var addresses []string
 		if !eth.DHCP4 && !eth.DHCP6 {
-			if len(eth.Addresses) == 0 {
+			if len(eth.Addresses) == 0 && len(parentToVLANs[key]) == 0 {
 				return fmt.Errorf("interface %s: no addresses and dhcp4/dhcp6 not set", ifaceName)
 			}
 			for _, addr := range eth.Addresses {
@@ -462,6 +499,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			DHCP6      bool
 			Optional   bool
 			MTU        int
+			VLANs      []string
 		}{
 			Addresses:  addresses,
 			MacAddress: eth.Match.MACAddress,
@@ -472,6 +510,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			DHCP6:      eth.DHCP6,
 			Optional:   eth.Optional,
 			MTU:        eth.MTU,
+			VLANs:      parentToVLANs[key],
 		}
 		if err := writeNetworkFile(networkFilePath, networkTmpl, networkData); err != nil {
 			return fmt.Errorf("failed to write network config for %s: %v", ifaceName, err)
@@ -497,6 +536,84 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 
 		nameservers = append(nameservers, eth.Nameservers.Addresses...)
 		searchDomains = append(searchDomains, eth.Nameservers.Search...)
+	}
+
+	// Generate .netdev and .network files for each VLAN.
+	if len(config.VLANs) > 0 {
+		vlanNames := make([]string, 0, len(config.VLANs))
+		for name := range config.VLANs {
+			vlanNames = append(vlanNames, name)
+		}
+		sort.Strings(vlanNames)
+
+		for _, vlanName := range vlanNames {
+			v := config.VLANs[vlanName]
+			if !isValidInterfaceName(vlanName) {
+				return fmt.Errorf("invalid VLAN interface name %q", vlanName)
+			}
+			if v.ID < 0 || v.ID > 4094 {
+				return fmt.Errorf("vlan %q: id %d is out of range (0–4094)", vlanName, v.ID)
+			}
+
+			// .netdev file
+			netdevPath := filepath.Join(networkDir, "10-cloud-init-"+vlanName+".netdev")
+			netdevData := struct {
+				Name string
+				ID   int
+			}{Name: vlanName, ID: v.ID}
+			if err := writeNetworkFile(netdevPath, netdevVLANTmpl, netdevData); err != nil {
+				return fmt.Errorf("failed to write netdev for VLAN %s: %v", vlanName, err)
+			}
+			slog.Info("generated VLAN netdev", "vlan", vlanName, "path", netdevPath)
+
+			// .network file for the VLAN interface itself
+			var vlanAddresses []string
+			if !v.DHCP4 && !v.DHCP6 {
+				for _, addr := range v.Addresses {
+					ip, prefix, parseErr := parseCIDRAddress(addr)
+					if parseErr != nil {
+						return fmt.Errorf("vlan %s: %v", vlanName, parseErr)
+					}
+					vlanAddresses = append(vlanAddresses, fmt.Sprintf("%s/%d", ip, prefix))
+				}
+			}
+			if v.Gateway4 != "" && !isValidIPAddress(v.Gateway4) {
+				return fmt.Errorf("vlan %s: invalid gateway4 %q", vlanName, v.Gateway4)
+			}
+			if v.Gateway6 != "" && !isValidIPAddress(v.Gateway6) {
+				return fmt.Errorf("vlan %s: invalid gateway6 %q", vlanName, v.Gateway6)
+			}
+
+			vlanNetworkPath := filepath.Join(networkDir, "10-cloud-init-"+vlanName+".network")
+			vlanNetworkData := struct {
+				Addresses  []string
+				MacAddress string
+				Name       string
+				Gateway    string
+				Gateway6   string
+				DHCP4      bool
+				DHCP6      bool
+				Optional   bool
+				MTU        int
+				VLANs      []string
+			}{
+				Addresses: vlanAddresses,
+				Name:      vlanName,
+				Gateway:   v.Gateway4,
+				Gateway6:  v.Gateway6,
+				DHCP4:     v.DHCP4,
+				DHCP6:     v.DHCP6,
+				Optional:  v.Optional,
+				MTU:       v.MTU,
+			}
+			if err := writeNetworkFile(vlanNetworkPath, networkTmpl, vlanNetworkData); err != nil {
+				return fmt.Errorf("failed to write network config for VLAN %s: %v", vlanName, err)
+			}
+			slog.Info("generated VLAN network config", "vlan", vlanName, "path", vlanNetworkPath)
+
+			nameservers = append(nameservers, v.Nameservers.Addresses...)
+			searchDomains = append(searchDomains, v.Nameservers.Search...)
+		}
 	}
 
 	if len(nameservers) > 0 {
