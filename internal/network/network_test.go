@@ -1281,6 +1281,69 @@ func TestCleanStaleCIDataFiles(t *testing.T) {
 	}
 }
 
+// TestGenerateSystemdNetworkConfig_V2MultipleAddresses verifies that when an
+// interface has more than one address all of them are emitted as separate
+// Address= lines in the generated .network file.
+func TestGenerateSystemdNetworkConfig_V2MultipleAddresses(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:     struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "52:54:00:ab:cd:ef"},
+				SetName:   "eth0",
+				Addresses: []string{"192.0.2.10/24", "198.51.100.10/24"},
+				Gateway4:  "192.0.2.1",
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "Address=192.0.2.10/24")
+	assertFileContains(t, networkFile, "Address=198.51.100.10/24")
+	assertFileContains(t, networkFile, "Gateway=192.0.2.1")
+	assertFileNotContains(t, networkFile, "DHCP=ipv4")
+}
+
+// TestGenerateSystemdNetworkConfig_V1MultipleSubnets verifies that when a
+// physical interface has more than one static subnet, all addresses are emitted
+// and only the first non-empty gateway is used.
+func TestGenerateSystemdNetworkConfig_V1MultipleSubnets(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "52:54:00:ab:cd:ef",
+				Subnets: []types.NetworkConfigV1Subnet{
+					{Type: "static", Address: "192.0.2.10", Netmask: "255.255.255.0", Gateway: "192.0.2.1"},
+					{Type: "static", Address: "198.51.100.10", Netmask: "255.255.255.0"},
+				},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "Address=192.0.2.10/24")
+	assertFileContains(t, networkFile, "Address=198.51.100.10/24")
+	assertFileContains(t, networkFile, "Gateway=192.0.2.1")
+	assertFileNotContains(t, networkFile, "DHCP=ipv4")
+}
+
 func assertFileContains(t *testing.T, path, substr string) {
 	t.Helper()
 	b, err := os.ReadFile(path)

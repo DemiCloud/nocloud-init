@@ -133,7 +133,9 @@ Name={{.Name}}
 {{- if .DHCP }}
 DHCP=ipv4
 {{- else }}
-Address={{.Address}}/{{.CIDR}}
+{{- range .Addresses}}
+Address={{.}}
+{{- end}}
 {{- if .Gateway }}
 Gateway={{.Gateway}}
 {{- end }}
@@ -301,30 +303,32 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			return fmt.Errorf("invalid MAC address %q for interface %s", entry.MacAddress, entry.Name)
 		}
 
-		if len(entry.Subnets) > 1 {
-			slog.Warn("interface has multiple subnets; only the first will be configured", "interface", entry.Name, "count", len(entry.Subnets))
-		}
-		subnet := entry.Subnets[0]
-		useDHCP := subnet.Type == "dhcp4"
+		useDHCP := entry.Subnets[0].Type == "dhcp4"
 
-		var cidr int
+		var addresses []string
+		var gateway string
 		if !useDHCP {
-			cidr, err = netmaskToCIDR(subnet.Netmask)
-			if err != nil {
-				return fmt.Errorf("failed to convert netmask to CIDR for %s: %v", entry.Name, err)
-			}
-			if !isValidIPAddress(subnet.Address) {
-				return fmt.Errorf("interface %s: invalid address %q", entry.Name, subnet.Address)
-			}
-			if subnet.Gateway != "" && !isValidIPAddress(subnet.Gateway) {
-				return fmt.Errorf("interface %s: invalid gateway %q", entry.Name, subnet.Gateway)
+			for _, subnet := range entry.Subnets {
+				cidr, err := netmaskToCIDR(subnet.Netmask)
+				if err != nil {
+					return fmt.Errorf("failed to convert netmask to CIDR for %s: %v", entry.Name, err)
+				}
+				if !isValidIPAddress(subnet.Address) {
+					return fmt.Errorf("interface %s: invalid address %q", entry.Name, subnet.Address)
+				}
+				if subnet.Gateway != "" && !isValidIPAddress(subnet.Gateway) {
+					return fmt.Errorf("interface %s: invalid gateway %q", entry.Name, subnet.Gateway)
+				}
+				addresses = append(addresses, fmt.Sprintf("%s/%d", subnet.Address, cidr))
+				if gateway == "" && subnet.Gateway != "" {
+					gateway = subnet.Gateway
+				}
 			}
 		}
 
 		networkFilePath := filepath.Join(networkDir, "10-cloud-init-"+entry.Name+".network")
 		networkData := struct {
-			Address    string
-			CIDR       int
+			Addresses  []string
 			MacAddress string
 			Name       string
 			Gateway    string
@@ -332,11 +336,10 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Optional   bool
 			MTU        int
 		}{
-			Address:    subnet.Address,
-			CIDR:       cidr,
+			Addresses:  addresses,
 			MacAddress: entry.MacAddress,
 			Name:       entry.Name,
-			Gateway:    subnet.Gateway,
+			Gateway:    gateway,
 			DHCP:       useDHCP,
 		}
 		if err := writeNetworkFile(networkFilePath, networkTmpl, networkData); err != nil {
@@ -416,18 +419,17 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			return fmt.Errorf("invalid MAC address %q for interface %s", mac, ifaceName)
 		}
 
-		var address string
-		var cidr int
+		var addresses []string
 		if !eth.DHCP4 {
 			if len(eth.Addresses) == 0 {
 				return fmt.Errorf("interface %s: no addresses and dhcp4 not set", ifaceName)
 			}
-			if len(eth.Addresses) > 1 {
-				slog.Warn("interface has multiple addresses; only the first will be configured", "interface", ifaceName, "count", len(eth.Addresses))
-			}
-			address, cidr, err = parseCIDRAddress(eth.Addresses[0])
-			if err != nil {
-				return fmt.Errorf("interface %s: %v", ifaceName, err)
+			for _, addr := range eth.Addresses {
+				ip, prefix, parseErr := parseCIDRAddress(addr)
+				if parseErr != nil {
+					return fmt.Errorf("interface %s: %v", ifaceName, parseErr)
+				}
+				addresses = append(addresses, fmt.Sprintf("%s/%d", ip, prefix))
 			}
 		}
 
@@ -437,8 +439,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 
 		networkFilePath := filepath.Join(networkDir, "10-cloud-init-"+ifaceName+".network")
 		networkData := struct {
-			Address    string
-			CIDR       int
+			Addresses  []string
 			MacAddress string
 			Name       string
 			Gateway    string
@@ -446,8 +447,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Optional   bool
 			MTU        int
 		}{
-			Address:    address,
-			CIDR:       cidr,
+			Addresses:  addresses,
 			MacAddress: eth.Match.MACAddress,
 			Name:       ifaceName,
 			Gateway:    eth.Gateway4,
