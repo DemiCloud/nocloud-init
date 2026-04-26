@@ -384,6 +384,9 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 				if gateway == "" && subnet.Gateway != "" {
 					gateway = subnet.Gateway
 				}
+				// Per-subnet DNS overrides the global nameserver entries.
+				nameservers = append(nameservers, subnet.DNSNameservers...)
+				searchDomains = append(searchDomains, subnet.DNSSearch...)
 			}
 		}
 
@@ -497,7 +500,18 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 	}
 	sort.Strings(names)
 
+	// Build set of ethernet keys that are bond members so we can skip them in the ethernet loop.
+	bondMembers := make(map[string]bool)
+	for _, b := range config.Bonds {
+		for _, member := range b.Interfaces {
+			bondMembers[member] = true
+		}
+	}
+
 	for _, key := range names {
+		if bondMembers[key] {
+			continue
+		}
 		eth := config.Ethernets[key]
 
 		// Use set-name if provided, otherwise use the map key

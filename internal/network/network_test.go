@@ -1696,3 +1696,65 @@ func TestParseNetworkConfigV2Bond(t *testing.T) {
 		t.Errorf("bond0.Parameters.Mode = %q, want %q", b.Parameters.Mode, "active-backup")
 	}
 }
+
+func TestGenerateV1NetworkConfigPerIfaceDNS(t *testing.T) {
+	data, err := os.ReadFile("../types/testdata/nocloud-network-v1-per-iface-dns.yaml")
+	if err != nil {
+		t.Fatalf("failed to read testdata: %v", err)
+	}
+	var cfg types.NetworkConfig
+	if err := types.UnmarshalNetworkConfig(data, &cfg, false); err != nil {
+		t.Fatalf("UnmarshalNetworkConfig() error = %v", err)
+	}
+
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+	if err := generateSystemdNetworkConfigTo(cfg, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	// resolv.conf should contain all nameservers from both interfaces (deduplicated)
+	assertFileContains(t, resolvPath, "nameserver 192.0.2.53")
+	assertFileContains(t, resolvPath, "nameserver 8.8.8.8")
+	assertFileContains(t, resolvPath, "nameserver 10.0.0.53")
+	// search domains from eth0
+	assertFileContains(t, resolvPath, "example.com")
+	assertFileContains(t, resolvPath, "local")
+}
+
+func TestGenerateV1NetworkConfigSubnetDNSMergedWithGlobal(t *testing.T) {
+	// Per-interface and global nameserver entries should both appear in resolv.conf.
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "52:54:00:ab:cd:ef",
+				Subnets: []types.NetworkConfigV1Subnet{
+					{
+						Type:           "static",
+						Address:        "192.0.2.10",
+						Netmask:        "255.255.255.0",
+						DNSNameservers: []string{"192.0.2.53"},
+					},
+				},
+			},
+			{
+				Type:    "nameserver",
+				Address: []string{"8.8.8.8"},
+				Search:  []string{"example.com"},
+			},
+		},
+	}
+
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	assertFileContains(t, resolvPath, "nameserver 192.0.2.53")
+	assertFileContains(t, resolvPath, "nameserver 8.8.8.8")
+	assertFileContains(t, resolvPath, "example.com")
+}

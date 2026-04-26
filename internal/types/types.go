@@ -363,10 +363,12 @@ type NetworkConfigV1Entry struct {
 }
 
 type NetworkConfigV1Subnet struct {
-	Type    string `yaml:"type" json:"type"`
-	Address string `yaml:"address" json:"address"`
-	Netmask string `yaml:"netmask" json:"netmask"`
-	Gateway string `yaml:"gateway" json:"gateway"`
+	Type             string   `yaml:"type" json:"type"`
+	Address          string   `yaml:"address" json:"address"`
+	Netmask          string   `yaml:"netmask" json:"netmask"`
+	Gateway          string   `yaml:"gateway" json:"gateway"`
+	DNSNameservers   []string `yaml:"dns_nameservers" json:"dns_nameservers"`
+	DNSSearch        []string `yaml:"dns_search" json:"dns_search"`
 }
 
 // NetworkConfigV2Ethernet is an entry in a v2 network-config ethernets map.
