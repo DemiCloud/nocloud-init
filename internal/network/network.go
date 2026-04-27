@@ -266,7 +266,13 @@ func UpdateResolvConf(nameservers []string, searchDomain string) error {
 func updateResolvConfAt(path string, nameservers []string, searchDomain string) error {
 	if _, err := os.Lstat(path); err == nil {
 		if link, err := os.Readlink(path); err == nil {
-			return fmt.Errorf("%s is a symlink to %s, cannot edit directly", path, link)
+			// resolv.conf is owned by a stub resolver (e.g. systemd-resolved,
+			// dnsmasq, unbound). On networkd systems the DNS= lines in .network
+			// files are passed to the resolver automatically, so no direct write
+			// is needed. Skip silently rather than treating this as an error.
+			slog.Info("resolv.conf is a symlink, skipping direct write; DNS will be applied via .network files",
+				"path", path, "target", link)
+			return nil
 		}
 	}
 

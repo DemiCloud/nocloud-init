@@ -680,7 +680,7 @@ func TestUpdateResolvConfAt_EmptySearchDomain(t *testing.T) {
 	assertFileContains(t, path, "options edns0")
 }
 
-func TestUpdateResolvConfAt_SymlinkRejected(t *testing.T) {
+func TestUpdateResolvConfAt_SymlinkSkipped(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real-resolv.conf")
 	link := filepath.Join(dir, "resolv.conf")
@@ -692,12 +692,18 @@ func TestUpdateResolvConfAt_SymlinkRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := updateResolvConfAt(link, []string{"1.1.1.1"}, "example.com")
-	if err == nil {
-		t.Fatal("expected error for symlink target, got nil")
+	// Should return nil — symlink means a stub resolver owns resolv.conf.
+	if err := updateResolvConfAt(link, []string{"1.1.1.1"}, "example.com"); err != nil {
+		t.Fatalf("expected nil for symlink target, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "symlink") {
-		t.Errorf("error %q should mention symlink", err.Error())
+
+	// The symlink target must be untouched.
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "# real\n" {
+		t.Errorf("symlink target was modified; got %q", string(got))
 	}
 }
 
