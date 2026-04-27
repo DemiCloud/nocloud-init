@@ -1764,3 +1764,256 @@ func TestGenerateV1NetworkConfigSubnetDNSMergedWithGlobal(t *testing.T) {
 	assertFileContains(t, resolvPath, "nameserver 8.8.8.8")
 	assertFileContains(t, resolvPath, "example.com")
 }
+
+// ── V1 dhcp6 ──────────────────────────────────────────────────────────────────
+
+func TestGenerateSystemdNetworkConfig_V1DHCP6(t *testing.T) {
+	dir := t.TempDir()
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets:    []types.NetworkConfigV1Subnet{{Type: "dhcp6"}},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "DHCP=ipv6")
+	assertFileNotContains(t, networkFile, "DHCP=ipv4")
+	assertFileNotContains(t, networkFile, "DHCP=yes")
+	assertFileNotContains(t, networkFile, "\nAddress=")
+}
+
+func TestGenerateSystemdNetworkConfig_V1DHCP4and6(t *testing.T) {
+	dir := t.TempDir()
+
+	config := types.NetworkConfig{
+		Version: 1,
+		Config: []types.NetworkConfigV1Entry{
+			{
+				Type:       "physical",
+				Name:       "eth0",
+				MacAddress: "aa:bb:cc:dd:ee:ff",
+				Subnets: []types.NetworkConfigV1Subnet{
+					{Type: "dhcp4"},
+					{Type: "dhcp6"},
+				},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	networkFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	assertFileContains(t, networkFile, "DHCP=yes")
+	assertFileNotContains(t, networkFile, "DHCP=ipv4")
+	assertFileNotContains(t, networkFile, "DHCP=ipv6")
+}
+
+// ── V2 per-interface routes ────────────────────────────────────────────────────
+
+func TestGenerateSystemdNetworkConfig_V2Routes(t *testing.T) {
+	dir := t.TempDir()
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:     struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName:   "eth0",
+				Addresses: []string{"192.0.2.10/24"},
+				Routes: []types.NetworkConfigV2Route{
+					{To: "10.0.0.0/8", Via: "192.0.2.1"},
+					{To: "default", Via: "192.0.2.1"},
+					{To: "", Via: "198.51.100.1"},
+				},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	netFile := filepath.Join(dir, "10-cloud-init-eth0.network")
+	// Specific destination route
+	assertFileContains(t, netFile, "Destination=10.0.0.0/8")
+	assertFileContains(t, netFile, "Gateway=192.0.2.1")
+	// "default" and "" should not emit a Destination= line
+	assertFileNotContains(t, netFile, "Destination=default")
+	assertFileNotContains(t, netFile, "Destination=\n")
+	// Second default route gateway must appear
+	assertFileContains(t, netFile, "Gateway=198.51.100.1")
+}
+
+func TestGenerateSystemdNetworkConfig_V2RoutesInvalidDest(t *testing.T) {
+	dir := t.TempDir()
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP4:   true,
+				Routes:  []types.NetworkConfigV2Route{{To: "not-a-cidr", Via: "192.0.2.1"}},
+			},
+		},
+	}
+
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid route destination, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid destination") {
+		t.Errorf("error %q should mention invalid destination", err.Error())
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V2RoutesInvalidGateway(t *testing.T) {
+	dir := t.TempDir()
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match:   struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SetName: "eth0",
+				DHCP4:   true,
+				Routes:  []types.NetworkConfigV2Route{{To: "", Via: "not-an-ip"}},
+			},
+		},
+	}
+
+	err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf"))
+	if err == nil {
+		t.Fatal("expected error for invalid route gateway, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid gateway") {
+		t.Errorf("error %q should mention invalid gateway", err.Error())
+	}
+}
+
+// ── V2 bridges ────────────────────────────────────────────────────────────────
+
+func TestGenerateSystemdNetworkConfig_V2Bridge(t *testing.T) {
+	dir := t.TempDir()
+	resolvPath := filepath.Join(dir, "resolv.conf")
+
+	stpOn := true
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {
+				Match: struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"},
+			},
+		},
+		Bridges: map[string]types.NetworkConfigV2Bridge{
+			"br0": {
+				Interfaces: []string{"eth0"},
+				Parameters: types.NetworkConfigV2BridgeParameters{
+					STP:          &stpOn,
+					ForwardDelay: 4,
+				},
+				NetworkConfigV2Ethernet: types.NetworkConfigV2Ethernet{
+					Addresses: []string{"192.0.2.10/24"},
+					Gateway4:  "192.0.2.1",
+				},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, resolvPath); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	// Bridge .netdev
+	netdevFile := filepath.Join(dir, "10-cloud-init-br0.netdev")
+	assertFileContains(t, netdevFile, "Kind=bridge")
+	assertFileContains(t, netdevFile, "STP=yes")
+	assertFileContains(t, netdevFile, "ForwardDelaySec=4")
+
+	// Bridge .network
+	networkFile := filepath.Join(dir, "10-cloud-init-br0.network")
+	assertFileContains(t, networkFile, "Address=192.0.2.10/24")
+	assertFileContains(t, networkFile, "Gateway=192.0.2.1")
+
+	// Bridge member .network
+	memberFile := filepath.Join(dir, "10-cloud-init-eth0-bridge.network")
+	assertFileContains(t, memberFile, "Name=eth0")
+	assertFileContains(t, memberFile, "Bridge=br0")
+
+	// eth0 must not get its own standalone .network file (it is a bridge member)
+	if _, err := os.Stat(filepath.Join(dir, "10-cloud-init-eth0.network")); !os.IsNotExist(err) {
+		t.Error("bridge member eth0 must not get a standalone .network file")
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V2BridgeDHCP(t *testing.T) {
+	dir := t.TempDir()
+
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {Match: struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"}},
+		},
+		Bridges: map[string]types.NetworkConfigV2Bridge{
+			"br0": {
+				Interfaces: []string{"eth0"},
+				NetworkConfigV2Ethernet: types.NetworkConfigV2Ethernet{
+					DHCP4: true,
+				},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-br0.network"), "DHCP=ipv4")
+	// Bridge .netdev must not have a [Bridge] section when no params are set.
+	netdevContent, err := os.ReadFile(filepath.Join(dir, "10-cloud-init-br0.netdev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(netdevContent), "[Bridge]") {
+		t.Error("[Bridge] section should not be emitted when no bridge parameters are set")
+	}
+}
+
+func TestGenerateSystemdNetworkConfig_V2BridgeSTPFalse(t *testing.T) {
+	dir := t.TempDir()
+
+	stpOff := false
+	config := types.NetworkConfig{
+		Version: 2,
+		Ethernets: map[string]types.NetworkConfigV2Ethernet{
+			"eth0": {Match: struct{ MACAddress string `yaml:"macaddress" json:"macaddress"` }{MACAddress: "aa:bb:cc:dd:ee:ff"}},
+		},
+		Bridges: map[string]types.NetworkConfigV2Bridge{
+			"br0": {
+				Interfaces: []string{"eth0"},
+				Parameters: types.NetworkConfigV2BridgeParameters{STP: &stpOff},
+				NetworkConfigV2Ethernet: types.NetworkConfigV2Ethernet{DHCP4: true},
+			},
+		},
+	}
+
+	if err := generateSystemdNetworkConfigTo(config, dir, filepath.Join(dir, "resolv.conf")); err != nil {
+		t.Fatalf("generateSystemdNetworkConfigTo() error = %v", err)
+	}
+
+	assertFileContains(t, filepath.Join(dir, "10-cloud-init-br0.netdev"), "STP=no")
+}

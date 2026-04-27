@@ -84,7 +84,8 @@ manage_etc_hosts: true
 			want: UserData{
 				Hostname: "myhost",
 				Chpasswd: struct {
-					Expire bool `yaml:"expire" json:"expire"`
+					Expire bool     `yaml:"expire" json:"expire"`
+					List   []string `yaml:"list" json:"list"`
 				}{Expire: true},
 			},
 		},

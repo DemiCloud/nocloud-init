@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/pflag"
 
@@ -171,6 +172,17 @@ Options:
 			if safeUserData.Password != "" {
 				safeUserData.Password = "[REDACTED]"
 			}
+			if len(safeUserData.Chpasswd.List) > 0 {
+				redacted := make([]string, len(safeUserData.Chpasswd.List))
+				for i, entry := range safeUserData.Chpasswd.List {
+					if idx := strings.IndexByte(entry, ':'); idx >= 0 {
+						redacted[i] = entry[:idx+1] + "[REDACTED]"
+					} else {
+						redacted[i] = "[REDACTED]"
+					}
+				}
+				safeUserData.Chpasswd.List = redacted
+			}
 			slog.Debug("parsed user-data", "userData", safeUserData)
 			if userData.Chpasswd.Expire {
 				// chpasswd.expire is accepted for spec compatibility but not
@@ -270,6 +282,28 @@ Options:
 			os.Exit(1)
 		}
 		slog.Info("updated password", "user", userData.User)
+	}
+
+	for _, entry := range userData.Chpasswd.List {
+		idx := strings.IndexByte(entry, ':')
+		if idx <= 0 {
+			slog.Error("chpasswd.list entry must be in user:hash format")
+			os.Exit(1)
+		}
+		user, hash := entry[:idx], entry[idx+1:]
+		if strings.ContainsRune(user, '\n') {
+			slog.Error("chpasswd.list entry: user name must not contain newlines")
+			os.Exit(1)
+		}
+		if !system.IsValidHashedPassword(hash) {
+			slog.Error("chpasswd.list entry must use a pre-hashed password (e.g. $6$...); plaintext passwords are not supported", "user", user)
+			os.Exit(1)
+		}
+		if err := system.UpdatePassword(user, hash); err != nil {
+			slog.Error("failed to update password from chpasswd.list", "user", user, "error", err)
+			os.Exit(1)
+		}
+		slog.Info("updated password", "user", user)
 	}
 
 	if userData.User != "" && len(userData.SSHAuthorizedKeys) > 0 {

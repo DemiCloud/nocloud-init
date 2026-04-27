@@ -58,6 +58,17 @@ func isValidDomain(domain string) bool {
 	return true
 }
 
+// isValidRouteDestination returns true if dst is a valid route destination:
+// either empty/unset (treated as a default route), the literal "default", or
+// a CIDR prefix (e.g. "192.168.1.0/24", "0.0.0.0/0").
+func isValidRouteDestination(dst string) bool {
+	if dst == "" || dst == "default" {
+		return true
+	}
+	_, _, err := net.ParseCIDR(dst)
+	return err == nil
+}
+
 // deduplicateStrings returns a new slice containing the elements of in with
 // duplicates removed, preserving first-seen order.
 func deduplicateStrings(in []string) []string {
@@ -155,6 +166,14 @@ VLAN={{.}}
 [Route]
 Gateway={{.Gateway6}}
 {{- end}}
+{{- range .Routes}}
+
+[Route]
+{{- if and .To (ne .To "default")}}
+Destination={{.To}}
+{{- end}}
+Gateway={{.Via}}
+{{- end}}
 {{- if .MTU}}
 
 [Link]
@@ -221,6 +240,40 @@ Name={{.MemberName}}
 
 [Network]
 Bond={{.BondName}}
+`
+
+const netdevBridgeTemplate = `[NetDev]
+Name={{.Name}}
+Kind=bridge
+{{- if or .STP .ForwardDelay .HelloTime .MaxAge .AgeingTime .Priority}}
+
+[Bridge]
+{{- if .STP}}
+STP={{.STP}}
+{{- end}}
+{{- if .ForwardDelay}}
+ForwardDelaySec={{.ForwardDelay}}
+{{- end}}
+{{- if .HelloTime}}
+HelloTimeSec={{.HelloTime}}
+{{- end}}
+{{- if .MaxAge}}
+MaxAgeSec={{.MaxAge}}
+{{- end}}
+{{- if .AgeingTime}}
+AgeingTimeSec={{.AgeingTime}}
+{{- end}}
+{{- if .Priority}}
+Priority={{.Priority}}
+{{- end}}
+{{- end}}
+`
+
+const networkBridgeMemberTemplate = `[Match]
+Name={{.MemberName}}
+
+[Network]
+Bridge={{.BridgeName}}
 `
 
 func netmaskToCIDR(netmask string) (int, error) {
@@ -370,11 +423,19 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			return fmt.Errorf("invalid MAC address %q for interface %s", entry.MacAddress, entry.Name)
 		}
 
-		useDHCP := entry.Subnets[0].Type == "dhcp4"
+		var useDHCP4, useDHCP6 bool
+		for _, subnet := range entry.Subnets {
+			switch subnet.Type {
+			case "dhcp4":
+				useDHCP4 = true
+			case "dhcp6":
+				useDHCP6 = true
+			}
+		}
 
 		var addresses []string
 		var gateway string
-		if !useDHCP {
+		if !useDHCP4 && !useDHCP6 {
 			for _, subnet := range entry.Subnets {
 				cidr, err := netmaskToCIDR(subnet.Netmask)
 				if err != nil {
@@ -408,12 +469,14 @@ func generateV1NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Optional   bool
 			MTU        int
 			VLANs      []string
+			Routes     []types.NetworkConfigV2Route
 		}{
 			Addresses:  addresses,
 			MacAddress: entry.MacAddress,
 			Name:       entry.Name,
 			Gateway:    gateway,
-			DHCP4:      useDHCP,
+			DHCP4:      useDHCP4,
+			DHCP6:      useDHCP6,
 		}
 		if err := writeNetworkFile(networkFilePath, networkTmpl, networkData); err != nil {
 			return fmt.Errorf("failed to write network config for %s: %v", entry.Name, err)
@@ -477,6 +540,14 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 	if err != nil {
 		return fmt.Errorf("failed to parse bond member template: %v", err)
 	}
+	netdevBridgeTmpl, err := template.New("netdevBridge").Parse(netdevBridgeTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse netdev bridge template: %v", err)
+	}
+	bridgeMemberTmpl, err := template.New("bridgeMember").Parse(networkBridgeMemberTemplate)
+	if err != nil {
+		return fmt.Errorf("failed to parse bridge member template: %v", err)
+	}
 
 	var nameservers []string
 	var searchDomains []string
@@ -506,10 +577,16 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 	}
 	sort.Strings(names)
 
-	// Build set of ethernet keys that are bond members so we can skip them in the ethernet loop.
+	// Build set of ethernet keys that are bond/bridge members so we can skip
+	// them in the ethernet loop.
 	bondMembers := make(map[string]bool)
 	for _, b := range config.Bonds {
 		for _, member := range b.Interfaces {
+			bondMembers[member] = true
+		}
+	}
+	for _, br := range config.Bridges {
+		for _, member := range br.Interfaces {
 			bondMembers[member] = true
 		}
 	}
@@ -553,6 +630,14 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 		if eth.Gateway6 != "" && !isValidIPAddress(eth.Gateway6) {
 			return fmt.Errorf("interface %s: invalid gateway6 %q", ifaceName, eth.Gateway6)
 		}
+		for _, r := range eth.Routes {
+			if !isValidRouteDestination(r.To) {
+				return fmt.Errorf("interface %s: route: invalid destination %q", ifaceName, r.To)
+			}
+			if !isValidIPAddress(r.Via) {
+				return fmt.Errorf("interface %s: route to %q: invalid gateway %q", ifaceName, r.To, r.Via)
+			}
+		}
 
 		networkFilePath := filepath.Join(networkDir, "10-cloud-init-"+ifaceName+".network")
 		networkData := struct {
@@ -566,6 +651,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Optional   bool
 			MTU        int
 			VLANs      []string
+			Routes     []types.NetworkConfigV2Route
 		}{
 			Addresses:  addresses,
 			MacAddress: eth.Match.MACAddress,
@@ -577,6 +663,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			Optional:   eth.Optional,
 			MTU:        eth.MTU,
 			VLANs:      parentToVLANs[key],
+			Routes:     eth.Routes,
 		}
 		if err := writeNetworkFile(networkFilePath, networkTmpl, networkData); err != nil {
 			return fmt.Errorf("failed to write network config for %s: %v", ifaceName, err)
@@ -649,6 +736,14 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			if v.Gateway6 != "" && !isValidIPAddress(v.Gateway6) {
 				return fmt.Errorf("vlan %s: invalid gateway6 %q", vlanName, v.Gateway6)
 			}
+			for _, r := range v.Routes {
+				if !isValidRouteDestination(r.To) {
+					return fmt.Errorf("vlan %s: route: invalid destination %q", vlanName, r.To)
+				}
+				if !isValidIPAddress(r.Via) {
+					return fmt.Errorf("vlan %s: route to %q: invalid gateway %q", vlanName, r.To, r.Via)
+				}
+			}
 
 			vlanNetworkPath := filepath.Join(networkDir, "10-cloud-init-"+vlanName+".network")
 			vlanNetworkData := struct {
@@ -662,6 +757,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 				Optional   bool
 				MTU        int
 				VLANs      []string
+				Routes     []types.NetworkConfigV2Route
 			}{
 				Addresses: vlanAddresses,
 				Name:      vlanName,
@@ -671,6 +767,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 				DHCP6:     v.DHCP6,
 				Optional:  v.Optional,
 				MTU:       v.MTU,
+				Routes:    v.Routes,
 			}
 			if err := writeNetworkFile(vlanNetworkPath, networkTmpl, vlanNetworkData); err != nil {
 				return fmt.Errorf("failed to write network config for VLAN %s: %v", vlanName, err)
@@ -744,6 +841,14 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 			if b.Gateway6 != "" && !isValidIPAddress(b.Gateway6) {
 				return fmt.Errorf("bond %s: invalid gateway6 %q", bondName, b.Gateway6)
 			}
+			for _, r := range b.Routes {
+				if !isValidRouteDestination(r.To) {
+					return fmt.Errorf("bond %s: route: invalid destination %q", bondName, r.To)
+				}
+				if !isValidIPAddress(r.Via) {
+					return fmt.Errorf("bond %s: route to %q: invalid gateway %q", bondName, r.To, r.Via)
+				}
+			}
 
 			bondNetworkPath := filepath.Join(networkDir, "10-cloud-init-"+bondName+".network")
 			bondNetworkData := struct {
@@ -757,6 +862,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 				Optional   bool
 				MTU        int
 				VLANs      []string
+				Routes     []types.NetworkConfigV2Route
 			}{
 				Addresses: bondAddresses,
 				Name:      bondName,
@@ -766,6 +872,7 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 				DHCP6:     b.DHCP6,
 				Optional:  b.Optional,
 				MTU:       b.MTU,
+				Routes:    b.Routes,
 			}
 			if err := writeNetworkFile(bondNetworkPath, networkTmpl, bondNetworkData); err != nil {
 				return fmt.Errorf("failed to write network config for bond %s: %v", bondName, err)
@@ -795,6 +902,138 @@ func generateV2NetworkConfig(config types.NetworkConfig, networkDir, resolvPath 
 
 			nameservers = append(nameservers, b.Nameservers.Addresses...)
 			searchDomains = append(searchDomains, b.Nameservers.Search...)
+		}
+	}
+
+	// Generate .netdev and .network files for each bridge.
+	if len(config.Bridges) > 0 {
+		bridgeNames := make([]string, 0, len(config.Bridges))
+		for name := range config.Bridges {
+			bridgeNames = append(bridgeNames, name)
+		}
+		sort.Strings(bridgeNames)
+
+		for _, bridgeName := range bridgeNames {
+			br := config.Bridges[bridgeName]
+			if !isValidInterfaceName(bridgeName) {
+				return fmt.Errorf("invalid bridge interface name %q", bridgeName)
+			}
+			if len(br.Interfaces) == 0 {
+				return fmt.Errorf("bridge %q: interfaces list must not be empty", bridgeName)
+			}
+
+			// Convert *bool STP parameter to "yes"/"no"/"" for the template.
+			stpStr := ""
+			if br.Parameters.STP != nil {
+				if *br.Parameters.STP {
+					stpStr = "yes"
+				} else {
+					stpStr = "no"
+				}
+			}
+
+			// .netdev file
+			netdevPath := filepath.Join(networkDir, "10-cloud-init-"+bridgeName+".netdev")
+			netdevData := struct {
+				Name         string
+				STP          string
+				ForwardDelay int
+				HelloTime    int
+				MaxAge       int
+				AgeingTime   int
+				Priority     int
+			}{
+				Name:         bridgeName,
+				STP:          stpStr,
+				ForwardDelay: br.Parameters.ForwardDelay,
+				HelloTime:    br.Parameters.HelloTime,
+				MaxAge:       br.Parameters.MaxAge,
+				AgeingTime:   br.Parameters.AgeingTime,
+				Priority:     br.Parameters.Priority,
+			}
+			if err := writeNetworkFile(netdevPath, netdevBridgeTmpl, netdevData); err != nil {
+				return fmt.Errorf("failed to write netdev for bridge %s: %v", bridgeName, err)
+			}
+			slog.Info("generated bridge netdev", "bridge", bridgeName, "path", netdevPath)
+
+			// .network file for the bridge interface itself
+			var bridgeAddresses []string
+			if !br.DHCP4 && !br.DHCP6 {
+				for _, addr := range br.Addresses {
+					ip, prefix, parseErr := parseCIDRAddress(addr)
+					if parseErr != nil {
+						return fmt.Errorf("bridge %s: %v", bridgeName, parseErr)
+					}
+					bridgeAddresses = append(bridgeAddresses, fmt.Sprintf("%s/%d", ip, prefix))
+				}
+			}
+			if br.Gateway4 != "" && !isValidIPAddress(br.Gateway4) {
+				return fmt.Errorf("bridge %s: invalid gateway4 %q", bridgeName, br.Gateway4)
+			}
+			if br.Gateway6 != "" && !isValidIPAddress(br.Gateway6) {
+				return fmt.Errorf("bridge %s: invalid gateway6 %q", bridgeName, br.Gateway6)
+			}
+			for _, r := range br.Routes {
+				if !isValidRouteDestination(r.To) {
+					return fmt.Errorf("bridge %s: route: invalid destination %q", bridgeName, r.To)
+				}
+				if !isValidIPAddress(r.Via) {
+					return fmt.Errorf("bridge %s: route to %q: invalid gateway %q", bridgeName, r.To, r.Via)
+				}
+			}
+
+			bridgeNetworkPath := filepath.Join(networkDir, "10-cloud-init-"+bridgeName+".network")
+			bridgeNetworkData := struct {
+				Addresses  []string
+				MacAddress string
+				Name       string
+				Gateway    string
+				Gateway6   string
+				DHCP4      bool
+				DHCP6      bool
+				Optional   bool
+				MTU        int
+				VLANs      []string
+				Routes     []types.NetworkConfigV2Route
+			}{
+				Addresses: bridgeAddresses,
+				Name:      bridgeName,
+				Gateway:   br.Gateway4,
+				Gateway6:  br.Gateway6,
+				DHCP4:     br.DHCP4,
+				DHCP6:     br.DHCP6,
+				Optional:  br.Optional,
+				MTU:       br.MTU,
+				Routes:    br.Routes,
+			}
+			if err := writeNetworkFile(bridgeNetworkPath, networkTmpl, bridgeNetworkData); err != nil {
+				return fmt.Errorf("failed to write network config for bridge %s: %v", bridgeName, err)
+			}
+			slog.Info("generated bridge network config", "bridge", bridgeName, "path", bridgeNetworkPath)
+
+			// .network file for each bridge member interface
+			for _, memberKey := range br.Interfaces {
+				if !isValidInterfaceName(memberKey) {
+					return fmt.Errorf("bridge %q: invalid member interface name %q", bridgeName, memberKey)
+				}
+				// Resolve the actual interface name (set-name or key)
+				memberName := memberKey
+				if eth, ok := config.Ethernets[memberKey]; ok && eth.SetName != "" {
+					memberName = eth.SetName
+				}
+				memberPath := filepath.Join(networkDir, "10-cloud-init-"+memberName+"-bridge.network")
+				memberData := struct {
+					MemberName string
+					BridgeName string
+				}{MemberName: memberName, BridgeName: bridgeName}
+				if err := writeNetworkFile(memberPath, bridgeMemberTmpl, memberData); err != nil {
+					return fmt.Errorf("bridge %s: failed to write member network config for %s: %v", bridgeName, memberName, err)
+				}
+				slog.Info("generated bridge member network config", "member", memberName, "bridge", bridgeName, "path", memberPath)
+			}
+
+			nameservers = append(nameservers, br.Nameservers.Addresses...)
+			searchDomains = append(searchDomains, br.Nameservers.Search...)
 		}
 	}
 

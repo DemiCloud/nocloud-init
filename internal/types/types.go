@@ -288,9 +288,13 @@ type UserData struct {
 	// Password must be a pre-hashed credential (e.g. "$6$..."). Plaintext
 	// passwords are not supported; the value is passed verbatim to chpasswd -e.
 	Password string `yaml:"password" json:"password"`
-	// Chpasswd is defined by the NoCloud spec but Expire is not yet implemented.
+	// Chpasswd applies password settings.  Expire requests a password change on
+	// next login (accepted but not implemented — see main.go).  List is a slice
+	// of "user:hashed-password" entries applied via chpasswd -e; pre-hashed
+	// credentials (e.g. "$6$...") are required.
 	Chpasswd struct {
-		Expire bool `yaml:"expire" json:"expire"`
+		Expire bool     `yaml:"expire" json:"expire"`
+		List   []string `yaml:"list" json:"list"`
 	} `yaml:"chpasswd" json:"chpasswd"`
 	// Users lists users to create. The special entry "default" is skipped.
 	Users UserList `yaml:"users" json:"users"`
@@ -319,6 +323,16 @@ type NetworkConfig struct {
 	Ethernets map[string]NetworkConfigV2Ethernet `yaml:"ethernets" json:"ethernets"` // v2
 	VLANs     map[string]NetworkConfigV2VLAN    `yaml:"vlans" json:"vlans"`         // v2
 	Bonds     map[string]NetworkConfigV2Bond    `yaml:"bonds" json:"bonds"`         // v2
+	Bridges   map[string]NetworkConfigV2Bridge `yaml:"bridges" json:"bridges"`     // v2
+}
+
+// NetworkConfigV2Route describes a static route entry in a v2 network-config.
+// To is the destination in CIDR notation (e.g. "192.168.1.0/24" or "0.0.0.0/0"),
+// the literal "default" (equivalent to the default route), or empty (also
+// treated as a default route).  Via is the next-hop gateway IP address.
+type NetworkConfigV2Route struct {
+	To  string `yaml:"to" json:"to"`
+	Via string `yaml:"via" json:"via"`
 }
 
 // NetworkConfigV2VLAN describes a VLAN interface in a v2 network-config.
@@ -352,6 +366,28 @@ type NetworkConfigV2BondParameters struct {
 type NetworkConfigV2Bond struct {
 	Interfaces []string                       `yaml:"interfaces" json:"interfaces"`
 	Parameters NetworkConfigV2BondParameters  `yaml:"parameters" json:"parameters"`
+	NetworkConfigV2Ethernet `yaml:",inline" json:",inline"`
+}
+
+// NetworkConfigV2BridgeParameters holds optional bridge configuration.
+// Fields map directly to the [Bridge] section of a systemd-networkd .netdev file.
+type NetworkConfigV2BridgeParameters struct {
+	STP          *bool  `yaml:"stp" json:"stp"`
+	ForwardDelay int    `yaml:"forward-delay" json:"forward-delay"`
+	HelloTime    int    `yaml:"hello-time" json:"hello-time"`
+	MaxAge       int    `yaml:"max-age" json:"max-age"`
+	AgeingTime   int    `yaml:"ageing-time" json:"ageing-time"`
+	Priority     int    `yaml:"priority" json:"priority"`
+}
+
+// NetworkConfigV2Bridge describes a bridge interface in a v2 network-config.
+// Interfaces lists the IDs of the ethernet entries that form the bridge members.
+// Parameters contains optional bridge configuration.
+// All common per-device properties (addresses, dhcp4, dhcp6, etc.) are
+// inherited from NetworkConfigV2Ethernet via embedding.
+type NetworkConfigV2Bridge struct {
+	Interfaces []string                        `yaml:"interfaces" json:"interfaces"`
+	Parameters NetworkConfigV2BridgeParameters `yaml:"parameters" json:"parameters"`
 	NetworkConfigV2Ethernet `yaml:",inline" json:",inline"`
 }
 
@@ -389,7 +425,8 @@ type NetworkConfigV2Ethernet struct {
 	DHCP4       bool     `yaml:"dhcp4" json:"dhcp4"`
 	DHCP6       bool     `yaml:"dhcp6" json:"dhcp6"`
 	Optional    bool     `yaml:"optional" json:"optional"`
-	MTU         int      `yaml:"mtu" json:"mtu"`
+	MTU         int                    `yaml:"mtu" json:"mtu"`
+	Routes      []NetworkConfigV2Route `yaml:"routes" json:"routes"`
 	Nameservers struct {
 		Addresses []string `yaml:"addresses" json:"addresses"`
 		Search    []string `yaml:"search" json:"search"`
