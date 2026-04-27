@@ -981,3 +981,167 @@ func TestCreateUsersInvalidHashedPasswd(t *testing.T) {
 		t.Fatal("CreateUsers() expected error for plaintext password, got nil")
 	}
 }
+
+func TestIsValidTimezone(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"UTC", true},
+		{"Europe/Berlin", true},
+		{"America/New_York", true},
+		{"Pacific/Auckland", true},
+		{"Etc/GMT+5", true},
+		// invalid
+		{"", false},
+		{"/UTC", false},               // absolute path
+		{"../etc/passwd", false},      // traversal
+		{"America//New_York", false},  // double slash → empty component
+		{strings.Repeat("a", 65), false}, // too long
+		{"UTC\x00evil", false},        // null byte
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := isValidTimezone(tt.input)
+			if got != tt.want {
+				t.Errorf("isValidTimezone(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSetTimezoneAt_TiledatectlSuccess(t *testing.T) {
+	bin := t.TempDir()
+	// Fake timedatectl that exits 0 and records its arguments.
+	argFile := filepath.Join(bin, "args.txt")
+	fakeTiledatectl := filepath.Join(bin, "timedatectl")
+	script := "#!/bin/sh\necho \"$@\" > " + argFile + "\nexit 0\n"
+	if err := os.WriteFile(fakeTiledatectl, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	dir := t.TempDir()
+	if err := setTimezoneAt("Europe/Berlin", dir, filepath.Join(dir, "localtime"), filepath.Join(dir, "timezone")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	args, err := os.ReadFile(argFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(args), "Europe/Berlin") {
+		t.Errorf("timedatectl not called with correct zone; args = %q", string(args))
+	}
+}
+
+func TestSetTimezoneAt_FallbackSymlink(t *testing.T) {
+	// No timedatectl in PATH → fallback path.
+	t.Setenv("PATH", t.TempDir())
+
+	zoneinfoDir := t.TempDir()
+	// Create a fake zoneinfo file for Europe/Berlin.
+	zoneDir := filepath.Join(zoneinfoDir, "Europe")
+	if err := os.MkdirAll(zoneDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	zoneFile := filepath.Join(zoneDir, "Berlin")
+	if err := os.WriteFile(zoneFile, []byte("fake zoneinfo"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	localtimePath := filepath.Join(dir, "localtime")
+	etcTimezonePath := filepath.Join(dir, "timezone")
+
+	if err := setTimezoneAt("Europe/Berlin", zoneinfoDir, localtimePath, etcTimezonePath); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// /etc/localtime must be a symlink pointing to the correct zoneinfo file.
+	target, err := os.Readlink(localtimePath)
+	if err != nil {
+		t.Fatalf("expected localtime to be a symlink: %v", err)
+	}
+	if target != zoneFile {
+		t.Errorf("symlink target = %q, want %q", target, zoneFile)
+	}
+
+	// /etc/timezone must contain the zone name.
+	tz, err := os.ReadFile(etcTimezonePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(tz)) != "Europe/Berlin" {
+		t.Errorf("/etc/timezone = %q, want %q", string(tz), "Europe/Berlin")
+	}
+}
+
+func TestSetTimezoneAt_FallbackMissingZoneinfo(t *testing.T) {
+	// No timedatectl in PATH.
+	t.Setenv("PATH", t.TempDir())
+
+	zoneinfoDir := t.TempDir() // empty — no zone files
+
+	dir := t.TempDir()
+	err := setTimezoneAt("Europe/Berlin", zoneinfoDir, filepath.Join(dir, "localtime"), filepath.Join(dir, "timezone"))
+	if err == nil {
+		t.Fatal("expected error for missing zoneinfo file, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("error %q should mention \"not found\"", err.Error())
+	}
+}
+
+func TestSetTimezoneAt_InvalidName(t *testing.T) {
+	dir := t.TempDir()
+	err := setTimezoneAt("../etc/passwd", dir, filepath.Join(dir, "localtime"), filepath.Join(dir, "timezone"))
+	if err == nil {
+		t.Fatal("expected error for invalid timezone name, got nil")
+	}
+}
+
+func TestSetTimezoneAt_FallbackReplacesExisting(t *testing.T) {
+	// No timedatectl in PATH.
+	t.Setenv("PATH", t.TempDir())
+
+	zoneinfoDir := t.TempDir()
+	// Create two zones to simulate switching.
+	for _, zone := range []string{"Europe/Berlin", "UTC"} {
+		parts := strings.Split(zone, "/")
+		if len(parts) == 2 {
+			if err := os.MkdirAll(filepath.Join(zoneinfoDir, parts[0]), 0755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(zoneinfoDir, filepath.FromSlash(zone)), []byte(zone), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dir := t.TempDir()
+	localtimePath := filepath.Join(dir, "localtime")
+	etcTimezonePath := filepath.Join(dir, "timezone")
+
+	// First call.
+	if err := setTimezoneAt("Europe/Berlin", zoneinfoDir, localtimePath, etcTimezonePath); err != nil {
+		t.Fatal(err)
+	}
+	// Second call should atomically replace the symlink.
+	if err := setTimezoneAt("UTC", zoneinfoDir, localtimePath, etcTimezonePath); err != nil {
+		t.Fatalf("second call failed: %v", err)
+	}
+
+	target, err := os.Readlink(localtimePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTarget := filepath.Join(zoneinfoDir, "UTC")
+	if target != wantTarget {
+		t.Errorf("symlink target = %q, want %q", target, wantTarget)
+	}
+	tz, _ := os.ReadFile(etcTimezonePath)
+	if strings.TrimSpace(string(tz)) != "UTC" {
+		t.Errorf("/etc/timezone = %q, want %q", string(tz), "UTC")
+	}
+}
+

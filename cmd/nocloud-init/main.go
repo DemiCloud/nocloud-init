@@ -239,6 +239,13 @@ Options:
 		slog.Info("updated hostname", "hostname", hostname)
 	}
 
+	if userData.Timezone != "" {
+		if err := system.SetTimezone(userData.Timezone); err != nil {
+			slog.Error("failed to set timezone", "timezone", userData.Timezone, "error", err)
+			os.Exit(1)
+		}
+	}
+
 	if len(userData.Groups) > 0 {
 		if err := system.CreateGroups(userData.Groups); err != nil {
 			slog.Error("failed to create groups", "error", err)

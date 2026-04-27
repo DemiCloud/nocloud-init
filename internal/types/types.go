@@ -305,6 +305,10 @@ type UserData struct {
 	Runcmd []RuncmdItem `yaml:"runcmd" json:"runcmd"`
 	// Groups lists groups to create on the system, with optional members.
 	Groups GroupList `yaml:"groups" json:"groups"`
+	// Timezone is an IANA timezone name (e.g. "Europe/Berlin", "UTC").
+	// Applied via timedatectl set-timezone; falls back to a manual
+	// /etc/localtime symlink if timedatectl is not available.
+	Timezone string `yaml:"timezone" json:"timezone"`
 }
 
 // NetworkConfig supports both NoCloud network-config v1 and v2 formats.

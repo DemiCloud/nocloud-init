@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -683,4 +684,114 @@ func createOneUser(u types.UserEntry) error {
 	}
 
 	return nil
+}
+
+// isValidTimezone reports whether tz is a safe IANA timezone name.
+// It must be non-empty, must not contain null bytes or consecutive dots that
+// could escape the zoneinfo directory, and each component must be non-empty.
+func isValidTimezone(tz string) bool {
+	if tz == "" || len(tz) > 64 {
+		return false
+	}
+	if strings.ContainsRune(tz, 0) {
+		return false
+	}
+	// Check components on the raw string before any path cleaning so that
+	// consecutive slashes (e.g. "America//New_York") are caught.
+	for _, part := range strings.Split(tz, "/") {
+		if part == "" || part == ".." || part == "." {
+			return false
+		}
+	}
+	// Reject any path traversal attempts after cleaning too.
+	clean := filepath.Clean(tz)
+	if filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
+		return false
+	}
+	return true
+}
+
+// SetTimezone applies the IANA timezone name tz to the system.
+//
+// It tries the following in order:
+//  1. timedatectl set-timezone <tz> — validates the zone, handles
+//     /etc/localtime atomically, works on any modern systemd host.
+//  2. Manual /etc/localtime symlink — used when timedatectl is absent
+//     (minimal containers, early-boot environments). Validates that the
+//     zoneinfo file exists before symlinking to prevent dangling links.
+//     Also writes /etc/timezone for Debian/Ubuntu compatibility.
+//
+// If timedatectl is found but returns an error (e.g. invalid zone name) that
+// error is returned immediately — the fallback is not attempted, because the
+// zone name itself is the problem.
+func SetTimezone(tz string) error {
+	return setTimezoneAt(tz, "/usr/share/zoneinfo", "/etc/localtime", "/etc/timezone")
+}
+
+// setTimezoneAt is the injectable inner function used by tests.
+func setTimezoneAt(tz, zoneinfoDir, localtimePath, etcTimezonePath string) error {
+	if !isValidTimezone(tz) {
+		return fmt.Errorf("invalid timezone %q: must be a non-empty IANA name (e.g. \"UTC\", \"Europe/Berlin\")", tz)
+	}
+
+	// Primary: timedatectl
+	out, err := exec.Command("timedatectl", "set-timezone", tz).CombinedOutput()
+	if err == nil {
+		slog.Info("set timezone via timedatectl", "timezone", tz)
+		return nil
+	}
+
+	// If timedatectl exists but failed, the zone name is likely invalid — don't
+	// fall through.
+	if !isNotFound(err) {
+		return fmt.Errorf("timedatectl set-timezone %q failed: %w: %s", tz, err, strings.TrimSpace(string(out)))
+	}
+
+	// Fallback: manual symlink.
+	slog.Debug("timedatectl not found, falling back to manual /etc/localtime symlink")
+
+	zoneFile := filepath.Join(zoneinfoDir, filepath.FromSlash(tz))
+	if _, err := os.Stat(zoneFile); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("timezone %q not found in %s", tz, zoneinfoDir)
+		}
+		return fmt.Errorf("failed to stat zoneinfo file for %q: %w", tz, err)
+	}
+
+	// Atomically replace /etc/localtime via temp symlink + rename.
+	dir := filepath.Dir(localtimePath)
+	tmp, err := os.CreateTemp(dir, ".localtime.*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file for localtime: %w", err)
+	}
+	tmpName := tmp.Name()
+	tmp.Close()
+	// Remove the placeholder file so we can create a symlink at that path.
+	if err := os.Remove(tmpName); err != nil {
+		return fmt.Errorf("failed to remove temp placeholder: %w", err)
+	}
+	defer os.Remove(tmpName) //nolint:errcheck
+
+	if err := os.Symlink(zoneFile, tmpName); err != nil {
+		return fmt.Errorf("failed to create temp symlink for localtime: %w", err)
+	}
+	if err := os.Rename(tmpName, localtimePath); err != nil {
+		return fmt.Errorf("failed to rename localtime symlink: %w", err)
+	}
+
+	// Write /etc/timezone for Debian/Ubuntu compatibility (harmless elsewhere).
+	_ = os.WriteFile(etcTimezonePath, []byte(tz+"\n"), 0644)
+
+	slog.Info("set timezone via /etc/localtime symlink", "timezone", tz, "zoneFile", zoneFile)
+	return nil
+}
+
+// isNotFound reports whether err (from exec.Command) indicates that the
+// executable was not found in PATH.
+func isNotFound(err error) bool {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return false
+	}
+	return errors.Is(err, exec.ErrNotFound) || os.IsNotExist(err)
 }
