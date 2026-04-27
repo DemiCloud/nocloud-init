@@ -599,6 +599,219 @@ func TestDecodeWriteFileContent(t *testing.T) {
 	}
 }
 
+func TestIsValidNTPServer(t *testing.T) {
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"0.pool.ntp.org", true},
+		{"ntp.example.com", true},
+		{"192.168.1.1", true},
+		{"2001:db8::1", true},
+		{strings.Repeat("a", 253), true},
+		// invalid
+		{"", false},
+		{"ntp server", false}, // space
+		{"ntp\tserver", false}, // tab
+		{"ntp\nserver", false}, // newline
+		{"ntp\x00server", false}, // null byte
+		{strings.Repeat("a", 254), false}, // too long
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := isValidNTPServer(tt.input); got != tt.want {
+				t.Errorf("isValidNTPServer(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseChronyConfdir(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "confdir present",
+			content: "pool pool.ntp.org iburst\nconfdir /etc/chrony/conf.d\nrtcsync\n",
+			want:    "/etc/chrony/conf.d",
+		},
+		{
+			name:    "confdir with tab",
+			content: "confdir\t/etc/chrony/conf.d\n",
+			want:    "/etc/chrony/conf.d",
+		},
+		{
+			name:    "confdir first match wins",
+			content: "confdir /first\nconfdir /second\n",
+			want:    "/first",
+		},
+		{
+			name:    "no confdir",
+			content: "pool pool.ntp.org iburst\nrtcsync\n",
+			want:    "",
+		},
+		{
+			name:    "confdir keyword in comment ignored",
+			content: "# confdir /commented\npool pool.ntp.org iburst\n",
+			want:    "",
+		},
+		{
+			name:    "empty file",
+			content: "",
+			want:    "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f, err := os.CreateTemp(t.TempDir(), "chrony.conf.*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.WriteString(tt.content); err != nil {
+				t.Fatal(err)
+			}
+			f.Close()
+
+			got, err := parseChronyConfdir(f.Name())
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseChronyConfdir() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("parseChronyConfdir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyNTP(t *testing.T) {
+	t.Run("empty servers is no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := applyNTPAt(nil, nil, dir); err != nil {
+			t.Fatal(err)
+		}
+		entries, _ := os.ReadDir(dir)
+		if len(entries) != 0 {
+			t.Errorf("expected no files written, got %v", entries)
+		}
+	})
+
+	t.Run("invalid server returns error", func(t *testing.T) {
+		dir := t.TempDir()
+		err := applyNTPAt([]string{"bad server"}, nil, dir)
+		if err == nil {
+			t.Fatal("expected error for server with space, got nil")
+		}
+	})
+
+	t.Run("chrony with confdir writes drop-in", func(t *testing.T) {
+		tmp := t.TempDir()
+		confdir := filepath.Join(tmp, "conf.d")
+
+		chronyConf := filepath.Join(tmp, "chrony.conf")
+		if err := os.WriteFile(chronyConf, []byte("pool pool.ntp.org iburst\nconfdir "+confdir+"\nrtcsync\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		timesyncdDir := filepath.Join(tmp, "timesyncd.conf.d")
+		servers := []string{"0.pool.ntp.org", "1.pool.ntp.org"}
+		if err := applyNTPAt(servers, []string{chronyConf}, timesyncdDir); err != nil {
+			t.Fatal(err)
+		}
+
+		// chrony drop-in must exist
+		dropIn := filepath.Join(confdir, "nocloud-init.conf")
+		data, err := os.ReadFile(dropIn)
+		if err != nil {
+			t.Fatalf("chrony drop-in not written: %v", err)
+		}
+		content := string(data)
+		for _, s := range servers {
+			want := "server " + s + " iburst"
+			if !strings.Contains(content, want) {
+				t.Errorf("drop-in missing %q; got:\n%s", want, content)
+			}
+		}
+
+		// timesyncd drop-in must NOT exist
+		if _, err := os.Stat(filepath.Join(timesyncdDir, "nocloud-init.conf")); !os.IsNotExist(err) {
+			t.Error("timesyncd drop-in should not have been written when chrony was used")
+		}
+	})
+
+	t.Run("chrony without confdir falls through to timesyncd", func(t *testing.T) {
+		tmp := t.TempDir()
+
+		chronyConf := filepath.Join(tmp, "chrony.conf")
+		if err := os.WriteFile(chronyConf, []byte("pool pool.ntp.org iburst\nrtcsync\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+
+		timesyncdDir := filepath.Join(tmp, "timesyncd.conf.d")
+		servers := []string{"time.cloudflare.com"}
+		if err := applyNTPAt(servers, []string{chronyConf}, timesyncdDir); err != nil {
+			t.Fatal(err)
+		}
+
+		dropIn := filepath.Join(timesyncdDir, "nocloud-init.conf")
+		data, err := os.ReadFile(dropIn)
+		if err != nil {
+			t.Fatalf("timesyncd drop-in not written: %v", err)
+		}
+		if !strings.Contains(string(data), "NTP=time.cloudflare.com") {
+			t.Errorf("unexpected timesyncd content:\n%s", data)
+		}
+	})
+
+	t.Run("no chrony config falls through to timesyncd", func(t *testing.T) {
+		tmp := t.TempDir()
+		timesyncdDir := filepath.Join(tmp, "timesyncd.conf.d")
+		servers := []string{"0.pool.ntp.org", "1.pool.ntp.org"}
+
+		if err := applyNTPAt(servers, []string{filepath.Join(tmp, "nonexistent.conf")}, timesyncdDir); err != nil {
+			t.Fatal(err)
+		}
+
+		dropIn := filepath.Join(timesyncdDir, "nocloud-init.conf")
+		data, err := os.ReadFile(dropIn)
+		if err != nil {
+			t.Fatalf("timesyncd drop-in not written: %v", err)
+		}
+		content := string(data)
+		if !strings.Contains(content, "[Time]") {
+			t.Errorf("missing [Time] section; got:\n%s", content)
+		}
+		if !strings.Contains(content, "NTP=0.pool.ntp.org 1.pool.ntp.org") {
+			t.Errorf("unexpected NTP= line; got:\n%s", content)
+		}
+	})
+
+	t.Run("timesyncd drop-in is overwritten on re-run", func(t *testing.T) {
+		tmp := t.TempDir()
+		timesyncdDir := filepath.Join(tmp, "timesyncd.conf.d")
+
+		first := []string{"old.ntp.example.com"}
+		if err := applyNTPAt(first, nil, timesyncdDir); err != nil {
+			t.Fatal(err)
+		}
+
+		second := []string{"new.ntp.example.com"}
+		if err := applyNTPAt(second, nil, timesyncdDir); err != nil {
+			t.Fatal(err)
+		}
+
+		data, _ := os.ReadFile(filepath.Join(timesyncdDir, "nocloud-init.conf"))
+		if strings.Contains(string(data), "old.ntp.example.com") {
+			t.Error("old NTP server still present after second run")
+		}
+		if !strings.Contains(string(data), "new.ntp.example.com") {
+			t.Error("new NTP server missing after second run")
+		}
+	})
+}
+
 func TestParseFilePermissions(t *testing.T) {
 	tests := []struct {
 		input   string

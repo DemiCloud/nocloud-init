@@ -258,6 +258,14 @@ Options:
 		}
 	}
 
+	ntpServers := append(userData.NTP.Servers, userData.NTP.Pools...)
+	if len(ntpServers) > 0 {
+		if err := system.ApplyNTP(ntpServers); err != nil {
+			slog.Error("failed to configure NTP", "error", err)
+			os.Exit(1)
+		}
+	}
+
 	if len(userData.Groups) > 0 {
 		if err := system.CreateGroups(userData.Groups); err != nil {
 			slog.Error("failed to create groups", "error", err)

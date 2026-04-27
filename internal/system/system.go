@@ -795,3 +795,124 @@ func isNotFound(err error) bool {
 	}
 	return errors.Is(err, exec.ErrNotFound) || os.IsNotExist(err)
 }
+
+// isValidNTPServer reports whether s is a safe NTP server name (hostname or
+// IP address).  It rejects empty strings, entries containing whitespace or
+// ASCII control characters, and entries longer than 253 characters.
+func isValidNTPServer(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	for _, c := range s {
+		if c <= 0x1f || c == 0x7f || c == ' ' {
+			return false
+		}
+	}
+	return true
+}
+
+// parseChronyConfdir reads the first "confdir <path>" directive from the
+// chrony config file at configPath and returns the path.  Returns ("", nil)
+// if the file contains no confdir directive.
+func parseChronyConfdir(configPath string) (string, error) {
+	f, err := os.Open(configPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Match "confdir" followed by at least one space or tab.
+		if len(line) > 7 && strings.EqualFold(line[:7], "confdir") && (line[7] == ' ' || line[7] == '\t') {
+			dir := strings.TrimSpace(line[7:])
+			if dir != "" {
+				return dir, nil
+			}
+		}
+	}
+	return "", scanner.Err()
+}
+
+var (
+	// chronyConfigCandidates are the well-known locations for the chrony
+	// configuration file, tried in order.
+	chronyConfigCandidates = []string{
+		"/etc/chrony/chrony.conf",
+		"/etc/chrony.conf",
+	}
+	// timesyncdDropinDir is where systemd-timesyncd drop-in files are placed.
+	timesyncdDropinDir = "/etc/systemd/timesyncd.conf.d"
+)
+
+// ApplyNTP configures NTP servers by probing for a supported daemon and
+// writing a drop-in configuration file.  servers may contain hostnames or IP
+// addresses; both are written identically.
+//
+// Probe order:
+//  1. chrony — if a config file is found and declares a confdir, write a
+//     "server <addr> iburst" drop-in there.
+//  2. timesyncd — write an [Time]\nNTP= drop-in to
+//     /etc/systemd/timesyncd.conf.d/.
+//  3. If no daemon is detected, log a warning and return nil.
+func ApplyNTP(servers []string) error {
+	return applyNTPAt(servers, chronyConfigCandidates, timesyncdDropinDir)
+}
+
+// applyNTPAt is the injectable inner function used by tests.
+func applyNTPAt(servers []string, chronyConfigs []string, timesyncdDir string) error {
+	if len(servers) == 0 {
+		return nil
+	}
+	for _, s := range servers {
+		if !isValidNTPServer(s) {
+			return fmt.Errorf("invalid NTP server %q: must be a non-empty hostname or IP address with no whitespace", s)
+		}
+	}
+
+	// --- Probe chrony ---
+	for _, cfgPath := range chronyConfigs {
+		confdir, err := parseChronyConfdir(cfgPath)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read chrony config %s: %w", cfgPath, err)
+		}
+		if confdir == "" {
+			// Config exists but has no confdir directive.  Per design: log a
+			// warning and skip rather than guessing a directory path; fall
+			// through to timesyncd.
+			slog.Warn("chrony config found but no confdir directive; skipping chrony NTP configuration — falling back to timesyncd", "config", cfgPath)
+			break
+		}
+
+		// Write chrony drop-in.
+		if err := os.MkdirAll(confdir, 0755); err != nil {
+			return fmt.Errorf("failed to create chrony confdir %s: %w", confdir, err)
+		}
+		var buf strings.Builder
+		for _, s := range servers {
+			fmt.Fprintf(&buf, "server %s iburst\n", s)
+		}
+		dropIn := filepath.Join(confdir, "nocloud-init.conf")
+		if err := writeFileAtomic(dropIn, []byte(buf.String()), 0644); err != nil {
+			return fmt.Errorf("failed to write chrony drop-in %s: %w", dropIn, err)
+		}
+		slog.Info("configured NTP via chrony drop-in", "path", dropIn)
+		return nil
+	}
+
+	// --- Fallback: systemd-timesyncd ---
+	if err := os.MkdirAll(timesyncdDir, 0755); err != nil {
+		slog.Warn("timesyncd drop-in directory unavailable; NTP configuration skipped", "dir", timesyncdDir, "error", err)
+		return nil
+	}
+	content := "[Time]\nNTP=" + strings.Join(servers, " ") + "\n"
+	dropIn := filepath.Join(timesyncdDir, "nocloud-init.conf")
+	if err := writeFileAtomic(dropIn, []byte(content), 0644); err != nil {
+		return fmt.Errorf("failed to write timesyncd drop-in %s: %w", dropIn, err)
+	}
+	slog.Info("configured NTP via timesyncd drop-in", "path", dropIn)
+	return nil
+}

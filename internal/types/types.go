@@ -313,6 +313,15 @@ type UserData struct {
 	// Applied via timedatectl set-timezone; falls back to a manual
 	// /etc/localtime symlink if timedatectl is not available.
 	Timezone string `yaml:"timezone" json:"timezone"`
+	// NTP configures NTP servers.  Servers lists specific NTP server
+	// hostnames or addresses; Pools lists NTP pool domains (e.g.
+	// "0.pool.ntp.org").  Both are applied identically — written as
+	// "server <addr> iburst" lines in a chrony drop-in or as "NTP=" in a
+	// timesyncd drop-in.
+	NTP struct {
+		Servers []string `yaml:"servers" json:"servers"`
+		Pools   []string `yaml:"pools" json:"pools"`
+	} `yaml:"ntp" json:"ntp"`
 }
 
 // NetworkConfig supports both NoCloud network-config v1 and v2 formats.
