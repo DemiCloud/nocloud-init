@@ -281,6 +281,10 @@ Options:
 	}
 
 	if userData.User != "" && userData.Password != "" {
+		if !system.IsValidLinuxName(userData.User) {
+			slog.Error("user field contains an invalid Linux user name", "user", userData.User)
+			os.Exit(1)
+		}
 		if !system.IsValidHashedPassword(userData.Password) {
 			slog.Error("password must be a pre-hashed credential (e.g. $6$...); plaintext passwords are not supported")
 			os.Exit(1)

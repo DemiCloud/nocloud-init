@@ -99,8 +99,17 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 // itself — only that the value is not a bare plaintext string.
 // All standard crypt(3) algorithms (SHA-512, SHA-256, yescrypt, bcrypt, …)
 // begin with "$<alphanumeric-id>$".
+//
+// Newlines are explicitly rejected: an embedded '\n' would cause
+// updatePasswordCmd to inject an additional "user:hash" pair into
+// chpasswd's stdin, potentially changing an unintended account's password.
 func IsValidHashedPassword(s string) bool {
 	if len(s) < 3 || s[0] != '$' {
+		return false
+	}
+	// Reject embedded newlines or carriage returns that would corrupt the
+	// chpasswd stdin line format and allow injection of extra entries.
+	if strings.ContainsAny(s, "\r\n") {
 		return false
 	}
 	rest := s[1:]
@@ -528,11 +537,11 @@ func cmdLabel(item types.RuncmdItem) string {
 	return strings.Join(item.Args, " ")
 }
 
-// isValidLinuxName reports whether s is a valid Linux user or group name.
+// IsValidLinuxName reports whether s is a valid Linux user or group name.
 // Matches useradd(8) / groupadd(8) conventions: 1–32 characters, starts with
 // a letter or underscore, followed by letters, digits, hyphens, underscores,
 // or dots.
-func isValidLinuxName(s string) bool {
+func IsValidLinuxName(s string) bool {
 	if len(s) == 0 || len(s) > 32 {
 		return false
 	}
@@ -564,7 +573,7 @@ func CreateGroups(groups types.GroupList) error {
 }
 
 func createOneGroup(g types.GroupEntry) error {
-	if !isValidLinuxName(g.Name) {
+	if !IsValidLinuxName(g.Name) {
 		return fmt.Errorf("invalid group name %q", g.Name)
 	}
 	cmd := exec.Command("groupadd", "--force", g.Name)
@@ -574,7 +583,7 @@ func createOneGroup(g types.GroupEntry) error {
 	slog.Info("created group", "group", g.Name)
 
 	for _, user := range g.Members {
-		if !isValidLinuxName(user) {
+		if !IsValidLinuxName(user) {
 			return fmt.Errorf("invalid member name %q for group %q", user, g.Name)
 		}
 		cmd := exec.Command("usermod", "-aG", g.Name, user)
@@ -603,7 +612,7 @@ func CreateUsers(users types.UserList) error {
 }
 
 func createOneUser(u types.UserEntry) error {
-	if !isValidLinuxName(u.Name) {
+	if !IsValidLinuxName(u.Name) {
 		return fmt.Errorf("invalid user name %q", u.Name)
 	}
 
@@ -627,7 +636,7 @@ func createOneUser(u types.UserEntry) error {
 	}
 	if len(u.Groups) > 0 {
 		for _, g := range u.Groups {
-			if !isValidLinuxName(g) {
+			if !IsValidLinuxName(g) {
 				return fmt.Errorf("user %q: invalid group name %q", u.Name, g)
 			}
 		}
@@ -667,6 +676,12 @@ func createOneUser(u types.UserEntry) error {
 	}
 
 	if u.Sudo != "" {
+		// Reject newlines in the sudo rule: a multi-line value would inject
+		// additional entries into /etc/sudoers.d/<user>, potentially granting
+		// privileges to unintended users.
+		if strings.ContainsAny(u.Sudo, "\r\n") {
+			return fmt.Errorf("user %q: sudo rule must not contain newlines", u.Name)
+		}
 		// Write a sudoers drop-in. The filename is the validated user name so
 		// it cannot contain path separators or other dangerous characters.
 		sudoersPath := filepath.Join("/etc/sudoers.d", u.Name)

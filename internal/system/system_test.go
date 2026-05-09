@@ -77,6 +77,9 @@ func TestIsValidHashedPassword(t *testing.T) {
 		{"$", false},
 		{"$$hash", false},  // empty ID
 		{"$ $hash", false}, // space in ID
+		// invalid: embedded newlines would inject extra chpasswd lines
+		{"$6$salt$hash\nroot:$6$rootsalt$roothash", false},
+		{"$6$salt$hash\r\n", false},
 	}
 
 	for _, tt := range tests {
@@ -1117,9 +1120,9 @@ func TestIsValidLinuxName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := isValidLinuxName(tt.input)
+			got := IsValidLinuxName(tt.input)
 			if got != tt.want {
-				t.Errorf("isValidLinuxName(%q) = %v, want %v", tt.input, got, tt.want)
+				t.Errorf("IsValidLinuxName(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -1358,3 +1361,21 @@ func TestSetTimezoneAt_FallbackReplacesExisting(t *testing.T) {
 	}
 }
 
+// TestCreateUsersNewlineInSudoRule verifies that a sudo field containing an
+// embedded newline is rejected before anything is written to /etc/sudoers.d.
+func TestCreateUsersNewlineInSudoRule(t *testing.T) {
+	bin := t.TempDir()
+	fakeUseadd := filepath.Join(bin, "useradd")
+	if err := os.WriteFile(fakeUseadd, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("writing fake useradd: %v", err)
+	}
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+
+	// A sudo rule with a newline would inject a second line into the sudoers
+	// drop-in, potentially granting privileges to an unintended user.
+	injectedRule := "ALL=(ALL) NOPASSWD: ALL\nmalicious ALL=(ALL) NOPASSWD: ALL"
+	users := types.UserList{{Name: "alice", Sudo: injectedRule}}
+	if err := CreateUsers(users); err == nil {
+		t.Fatal("CreateUsers() expected error for sudo rule containing newline, got nil")
+	}
+}
